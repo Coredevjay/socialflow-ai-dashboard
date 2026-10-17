@@ -2,6 +2,7 @@ import Stripe from 'stripe';
 import { randomUUID } from 'crypto';
 import { prisma } from '../lib/prisma';
 import { createLogger } from '../lib/logger';
+import { ValidationError } from '../lib/errors';
 import {
   Subscription,
   PLAN_CREDITS,
@@ -177,10 +178,18 @@ export class BillingService {
   /**
    * Atomically deduct credits proportional to actual token usage (1 credit per token).
    * Uses the same conditional-update pattern as deductCredits to prevent TOCTOU races.
-   * Throws if the user has insufficient credits.
+   * Throws ValidationError if tokens is not a positive integer, or if the user has insufficient credits.
    * Returns updated balance.
    */
   public async deductCreditsForTokens(userId: string, tokens: number): Promise<number> {
+    if (!Number.isInteger(tokens) || tokens <= 0) {
+      throw new ValidationError(
+        'tokens must be a positive integer',
+        { tokens: ['must be a positive integer'] },
+        'INVALID_TOKEN_COUNT',
+      );
+    }
+
     return prisma.$transaction(async (tx) => {
       const sub = await tx.subscription.findUnique({ where: { userId } });
       if (!sub) throw new Error('No subscription found for user');
