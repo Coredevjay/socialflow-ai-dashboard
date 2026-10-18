@@ -3,7 +3,6 @@ variable "account_id"  { type = string }
 variable "image_uri"   { type = string }
 variable "db_name"     { type = string; default = "socialflow" }
 variable "db_username" { type = string; default = "socialflow" }
-variable "db_password" { type = string; sensitive = true }
 variable "jwt_secret"  { type = string; sensitive = true }
 variable "jwt_refresh_secret" { type = string; sensitive = true }
 variable "csrf_secret"        { type = string; sensitive = true }

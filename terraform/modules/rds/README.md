@@ -27,7 +27,6 @@ RDS instance itself, and exposes the connection details as outputs.
 | `allocated_storage` | Allocated storage for the database, in GiB. | `number` | no |
 | `db_name` | Name of the initial database to create. | `string` | no |
 | `username` | Master username for the database. | `string` | yes |
-| `password` | Master password for the database. | `string` | yes |
 | `subnet_ids` | Subnet IDs used for the database subnet group. | `list(string)` | yes |
 | `vpc_id` | VPC ID the security group is created in. | `string` | yes |
 | `allowed_cidr_blocks` | CIDR blocks allowed to connect to the database. | `list(string)` | no |
@@ -46,6 +45,7 @@ RDS instance itself, and exposes the connection details as outputs.
 | `db_instance_address` | Hostname of the RDS instance. |
 | `db_instance_port` | Port the RDS instance listens on. |
 | `db_name` | Name of the initial database. |
+| `master_user_secret_arn` | ARN of the Secrets Manager secret holding the master password (managed by RDS, `manage_master_user_password = true`). |
 | `security_group_id` | ID of the security group controlling access to the database. |
 
 ## Usage
@@ -56,7 +56,6 @@ module "rds" {
 
   identifier     = "my-app-db"
   username       = var.db_username
-  password       = var.db_password
   subnet_ids     = module.networking.private_subnet_ids
   vpc_id         = module.networking.vpc_id
   instance_class = "db.t3.micro"

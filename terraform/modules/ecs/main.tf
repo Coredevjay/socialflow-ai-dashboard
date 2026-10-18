@@ -41,6 +41,12 @@ resource "aws_iam_role_policy" "task_execution_ssm" {
             "kms:ViaService" = "ssm.${var.aws_region}.amazonaws.com"
           }
         }
+      },
+      {
+        # Scoped to the single RDS-managed master password secret.
+        Effect   = "Allow"
+        Action   = ["secretsmanager:GetSecretValue"]
+        Resource = [var.db_master_user_secret_arn]
       }
     ]
   })
@@ -107,7 +113,8 @@ resource "aws_ecs_task_definition" "app" {
       { name = "DB_PORT",      valueFrom = aws_ssm_parameter.db_port.arn },
       { name = "DB_NAME",      valueFrom = aws_ssm_parameter.db_name.arn },
       { name = "DB_USER",      valueFrom = aws_ssm_parameter.db_user.arn },
-      { name = "DB_PASSWORD",  valueFrom = aws_ssm_parameter.db_password.arn },
+      # Reads the `password` key of the RDS-managed Secrets Manager secret.
+      { name = "DB_PASSWORD",  valueFrom = "${var.db_master_user_secret_arn}:password::" },
       { name = "REDIS_URL",    valueFrom = aws_ssm_parameter.redis_url.arn },
       { name = "JWT_SECRET",   valueFrom = aws_ssm_parameter.jwt_secret.arn },
       { name = "JWT_REFRESH_SECRET", valueFrom = aws_ssm_parameter.jwt_refresh_secret.arn },
@@ -156,15 +163,6 @@ resource "aws_ssm_parameter" "db_user" {
   name  = "/socialflow/${var.env}/DB_USER"
   type  = "String"
   value = var.db_username
-}
-
-# The password is stored on its own, never concatenated into a connection
-# string with the host/user/db name — keeps a single Terraform-tracked
-# attribute from ever holding the whole secret.
-resource "aws_ssm_parameter" "db_password" {
-  name  = "/socialflow/${var.env}/DB_PASSWORD"
-  type  = "SecureString"
-  value = var.db_password
 }
 
 resource "aws_ssm_parameter" "redis_url" {
