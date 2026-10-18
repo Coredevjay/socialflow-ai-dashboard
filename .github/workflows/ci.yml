@@ -5,6 +5,10 @@ on:
   push:
     branches: [develop, staging, main, master]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   k8s-lint:
     name: Kubernetes Manifest Lint
