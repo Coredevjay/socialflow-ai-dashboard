@@ -39,10 +39,12 @@ spec:
         runAsUser: 1000
         fsGroup: 1000
       initContainers:
-        - name: migrate
+        # Read-only gate: fails if migrations are pending, so pods never serve a
+        # schema mismatch. Migrations themselves run once via migration-job.yaml.
+        - name: migrate-check
           image: socialflow-backend:latest
           imagePullPolicy: Always
-          command: ["npx", "prisma", "migrate", "deploy"]
+          command: ["npx", "prisma", "migrate", "status"]
           envFrom:
             - configMapRef:
                 name: socialflow-config

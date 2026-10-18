@@ -143,6 +143,14 @@ jobs:
         #     3. Extend "Deploy to Kubernetes" step with worker kubectl commands
         # -----------------------------------------------------------------------
         run: |
+          # Run migrations once, before any backend pod is rolled out.
+          kubectl delete job socialflow-migrate --namespace=staging --ignore-not-found
+          sed "s|image: socialflow-backend:latest|image: ${IMAGE}:${TAG}|" k8s/base/migration-job.yaml \
+            | kubectl apply --namespace=staging -f -
+          kubectl wait job/socialflow-migrate \
+            --for=condition=complete \
+            --namespace=staging \
+            --timeout=300s
           kubectl set image deployment/socialflow-backend \
             backend=${{ env.IMAGE }}:${{ env.TAG }} \
             --namespace=staging

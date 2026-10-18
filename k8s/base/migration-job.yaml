@@ -1,0 +1,40 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: socialflow-migrate
+  labels:
+    app: socialflow-migrate
+spec:
+  # Single pre-deploy migration run. The CD pipeline deletes any previous Job,
+  # applies this one with the new image tag, and waits for completion before
+  # rolling out the backend Deployment.
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app: socialflow-migrate
+    spec:
+      serviceAccountName: socialflow-backend
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+        - name: migrate
+          image: socialflow-backend:latest
+          imagePullPolicy: Always
+          command: ["npx", "prisma", "migrate", "deploy"]
+          envFrom:
+            - configMapRef:
+                name: socialflow-config
+            - secretRef:
+                name: socialflow-secrets
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
