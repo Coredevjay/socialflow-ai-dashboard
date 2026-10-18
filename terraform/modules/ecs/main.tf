@@ -18,6 +18,34 @@ resource "aws_iam_role_policy_attachment" "task_execution" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
+# The managed policy does not cover SSM parameter reads, so ECS cannot resolve
+# the `secrets` above without this. Scoped to this environment's parameter path.
+resource "aws_iam_role_policy" "task_execution_ssm" {
+  name = "ssm-secrets-access"
+  role = aws_iam_role.task_execution.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["ssm:GetParameters"]
+        Resource = ["arn:aws:ssm:${var.aws_region}:*:parameter/socialflow/${var.env}/*"]
+      },
+      {
+        # Needed to decrypt SecureString values; limited to calls made via SSM.
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt"]
+        Resource = ["*"]
+        Condition = {
+          StringEquals = {
+            "kms:ViaService" = "ssm.${var.aws_region}.amazonaws.com"
+          }
+        }
+      }
+    ]
+  })
+}
+
 resource "aws_iam_role" "task" {
   name               = "socialflow-${var.env}-ecs-task"
   assume_role_policy = data.aws_iam_policy_document.ecs_assume.json
