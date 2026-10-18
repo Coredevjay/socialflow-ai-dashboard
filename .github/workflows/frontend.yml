@@ -5,10 +5,14 @@ on:
   push:
     branches: [develop, staging, main, master]
 
+permissions:
+  contents: read
+
 jobs:
   build-and-budget:
     name: Build, bundle budget, a11y lint
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -42,6 +46,7 @@ jobs:
   e2e:
     name: E2E smoke suite
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
