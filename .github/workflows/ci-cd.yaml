@@ -144,6 +144,7 @@ jobs:
         # -----------------------------------------------------------------------
         run: |
           kubectl set image deployment/socialflow-backend \
+            migrate=${{ env.IMAGE }}:${{ env.TAG }} \
             backend=${{ env.IMAGE }}:${{ env.TAG }} \
             --namespace=staging
           kubectl rollout status deployment/socialflow-backend \
