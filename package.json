@@ -1,7 +1,7 @@
 {
   "name": "socialflow-ai-dashboard",
   "version": "1.0.0",
-  "description": "",
+  "description": "AI-powered social media management dashboard for scheduling, analytics and multi-platform publishing",
   "main": "index.js",
   "workspaces": [
     "packages/*",
@@ -40,11 +40,15 @@
     ]
   },
   "keywords": [],
-  "author": "",
+  "author": "hman38705",
   "license": "ISC",
   "type": "commonjs",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hman38705/socialflow-ai-dashboard.git"
+  },
   "bugs": {
-    "url": "https://github.com/obajecollinsmicheal-cmd/socialflow-ai-dashboard/issues"
+    "url": "https://github.com/hman38705/socialflow-ai-dashboard/issues"
   },
   "dependencies": {
     "@google/genai": "latest",
@@ -77,7 +81,7 @@
     "socket.io-client": "^4.8.3",
     "soroban-client": "^1.0.1"
   },
-  "homepage": "https://github.com/obajecollinsmicheal-cmd/socialflow-ai-dashboard#readme",
+  "homepage": "https://github.com/hman38705/socialflow-ai-dashboard#readme",
   "devDependencies": {
     "@faker-js/faker": "^10.6.0",
     "@playwright/test": "^1.62.1",
