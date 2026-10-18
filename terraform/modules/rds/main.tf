@@ -29,9 +29,12 @@ resource "aws_db_parameter_group" "main" {
   name   = "socialflow-${var.env}-params"
   family = "postgres15"
 
+  # shared_buffers is counted in 8 kB pages, so 25% of instance memory is
+  # DBInstanceClassMemory/32768 (AWS default formula). It is static, so it needs a reboot.
   parameter {
-    name  = "shared_buffers"
-    value = "{DBInstanceClassMemory/4}"
+    name         = "shared_buffers"
+    value        = "{DBInstanceClassMemory/32768}"
+    apply_method = "pending-reboot"
   }
 
   parameter {
@@ -39,9 +42,11 @@ resource "aws_db_parameter_group" "main" {
     value = "4096"
   }
 
+  # max_connections is static on RDS PostgreSQL as well.
   parameter {
-    name  = "max_connections"
-    value = "200"
+    name         = "max_connections"
+    value        = "200"
+    apply_method = "pending-reboot"
   }
 
   tags = { Name = "socialflow-${var.env}-params" }
