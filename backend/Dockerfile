@@ -4,7 +4,7 @@
 #   docker build -f backend/Dockerfile backend/
 
 # ── Stage 1: build ───────────────────────────────────────────────────────────
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS builder
 
 WORKDIR /app
 
@@ -28,7 +28,7 @@ RUN node_modules/.bin/tsc --skipLibCheck && \
     test -d dist && echo "Build succeeded" || (echo "Build failed: dist/ not created" && exit 1)
 
 # ── Stage 2: production image ─────────────────────────────────────────────────
-FROM node:20-alpine AS runner
+FROM node:22-alpine AS runner
 
 # Non-root user for security
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup
