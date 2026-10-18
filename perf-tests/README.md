@@ -50,6 +50,12 @@ Scenarios run in sequence via `startTime` so they don't overlap:
 - `POST /api/v1/ai/analyze-image` — AI content generation
 - `POST /api/v1/tiktok/upload` — post publishing
 
+## CI
+
+`.github/workflows/k6-load-test.yml` runs this script nightly (02:00 UTC) and on manual dispatch. It starts the backend against a Postgres service container, runs k6, and uploads the `k6-summary.json` artifact. Threshold failures fail the job.
+
+The job needs a repository secret `K6_AUTH_TOKEN` holding a valid bearer token. Without it, the k6 step is skipped and a notice is emitted.
+
 ## Baseline Results
 
 Run the load test and record results here after each significant release to track performance regressions.
