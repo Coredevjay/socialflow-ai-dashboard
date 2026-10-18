@@ -158,9 +158,10 @@ jobs:
           #   --timeout=120s
 
       - name: Smoke test /health
+        env:
+          BACKEND_URL: ${{ secrets.STAGING_BACKEND_URL }}
         run: |
-          BACKEND_URL="${{ secrets.STAGING_BACKEND_URL }}"
           echo "Polling ${BACKEND_URL}/health ..."
           timeout 120 bash -c \
-            'until curl -sf "${BACKEND_URL}/health"; do echo "waiting..."; sleep 5; done'
+            'until curl -sf --max-time 10 "${BACKEND_URL}/health"; do echo "waiting..."; sleep 5; done'
           echo "Health check passed"
