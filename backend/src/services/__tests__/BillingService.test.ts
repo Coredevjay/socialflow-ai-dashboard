@@ -1,5 +1,6 @@
 import { BillingService } from '../BillingService';
 import { prisma } from '../../lib/prisma';
+import { ValidationError } from '../../lib/errors';
 import Stripe from 'stripe';
 import { randomUUID } from 'crypto';
 
@@ -283,6 +284,20 @@ describe('BillingService', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
     };
+
+    it.each([
+      ['zero', 0],
+      ['negative', -5],
+      ['NaN', NaN],
+      ['Infinity', Infinity],
+      ['-Infinity', -Infinity],
+      ['fractional', 1.5],
+    ])('should throw ValidationError when tokens is %s (%p)', async (_label, invalidTokens) => {
+      await expect(service.deductCreditsForTokens('user-123', invalidTokens)).rejects.toThrow(
+        ValidationError,
+      );
+      expect(prisma.subscription.findUnique).not.toHaveBeenCalled();
+    });
 
     it('should throw error when insufficient credits for tokens', async () => {
       const lowCreditSub = { ...mockSubscription, creditsRemaining: 50 };
