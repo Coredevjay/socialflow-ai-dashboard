@@ -81,7 +81,12 @@ resource "aws_ecs_task_definition" "app" {
       { name = "DB_USER",      valueFrom = aws_ssm_parameter.db_user.arn },
       { name = "DB_PASSWORD",  valueFrom = aws_ssm_parameter.db_password.arn },
       { name = "REDIS_URL",    valueFrom = aws_ssm_parameter.redis_url.arn },
-      { name = "JWT_SECRET",   valueFrom = aws_ssm_parameter.jwt_secret.arn }
+      { name = "JWT_SECRET",   valueFrom = aws_ssm_parameter.jwt_secret.arn },
+      { name = "JWT_REFRESH_SECRET", valueFrom = aws_ssm_parameter.jwt_refresh_secret.arn },
+      { name = "CSRF_SECRET",        valueFrom = aws_ssm_parameter.csrf_secret.arn },
+      { name = "STRIPE_SECRET_KEY",  valueFrom = aws_ssm_parameter.stripe_secret_key.arn },
+      { name = "TWITTER_API_KEY",    valueFrom = aws_ssm_parameter.twitter_api_key.arn },
+      { name = "TWITTER_API_SECRET", valueFrom = aws_ssm_parameter.twitter_api_secret.arn }
     ]
     logConfiguration = {
       logDriver = "awslogs"
@@ -144,6 +149,36 @@ resource "aws_ssm_parameter" "jwt_secret" {
   name  = "/socialflow/${var.env}/JWT_SECRET"
   type  = "SecureString"
   value = var.jwt_secret
+}
+
+resource "aws_ssm_parameter" "jwt_refresh_secret" {
+  name  = "/socialflow/${var.env}/JWT_REFRESH_SECRET"
+  type  = "SecureString"
+  value = var.jwt_refresh_secret
+}
+
+resource "aws_ssm_parameter" "csrf_secret" {
+  name  = "/socialflow/${var.env}/CSRF_SECRET"
+  type  = "SecureString"
+  value = var.csrf_secret
+}
+
+resource "aws_ssm_parameter" "stripe_secret_key" {
+  name  = "/socialflow/${var.env}/STRIPE_SECRET_KEY"
+  type  = "SecureString"
+  value = var.stripe_secret_key
+}
+
+resource "aws_ssm_parameter" "twitter_api_key" {
+  name  = "/socialflow/${var.env}/TWITTER_API_KEY"
+  type  = "SecureString"
+  value = var.twitter_api_key
+}
+
+resource "aws_ssm_parameter" "twitter_api_secret" {
+  name  = "/socialflow/${var.env}/TWITTER_API_SECRET"
+  type  = "SecureString"
+  value = var.twitter_api_secret
 }
 
 resource "aws_security_group" "alb" {
