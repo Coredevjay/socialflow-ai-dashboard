@@ -15,6 +15,13 @@ if (!DB_URL || !S3_BUCKET) {
   process.exit(1);
 }
 
+// Keep the password out of argv (visible via ps / /proc/<pid>/cmdline) by
+// handing it to pg_dump through PGPASSWORD instead of the connection string.
+const dbUrl = new URL(DB_URL);
+const dbPassword = decodeURIComponent(dbUrl.password);
+dbUrl.password = '';
+const pgDumpEnv = dbPassword ? { ...process.env, PGPASSWORD: dbPassword } : process.env;
+
 const s3 = new S3Client({ region: AWS_REGION });
 const timestamp = new Date().toISOString().split('T')[0];
 const backupFile = `/tmp/db-backup-${timestamp}.sql`;
@@ -25,7 +32,10 @@ async function backup() {
     console.log('Starting database backup...');
     const outFd = openSync(backupFile, 'w');
     try {
-      const result = spawnSync('pg_dump', [DB_URL], { stdio: ['ignore', outFd, 'inherit'] });
+      const result = spawnSync('pg_dump', [dbUrl.toString()], {
+        stdio: ['ignore', outFd, 'inherit'],
+        env: pgDumpEnv,
+      });
       if (result.error) throw result.error;
       if (result.status !== 0) {
         throw new Error(`pg_dump exited with status ${result.status}`);
