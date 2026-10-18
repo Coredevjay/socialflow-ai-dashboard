@@ -11,3 +11,9 @@ variable "aws_region" {
   description = "AWS region"
   type        = string
 }
+
+variable "logging_target_bucket" {
+  description = "Existing bucket that receives S3 server access logs. Leave null to disable access logging."
+  type        = string
+  default     = null
+}
