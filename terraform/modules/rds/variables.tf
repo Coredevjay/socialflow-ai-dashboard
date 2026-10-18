@@ -59,6 +59,7 @@ variable "backup_retention_period" {
 }
 
 variable "multi_az" {
-  description = "Whether to deploy the RDS instance across multiple Availability Zones for high availability"
+  description = "Whether to deploy the RDS instance across multiple Availability Zones for high availability; null defaults to true only for prod"
   type        = bool
+  default     = null
 }
