@@ -14,7 +14,7 @@ jobs:
 
       - name: Install kustomize
         run: |
-          curl -sL "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
+          curl -sL "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/kustomize/v5.4.3/hack/install_kustomize.sh" | bash -s 5.4.3 .
           sudo mv kustomize /usr/local/bin/
 
       - name: Render dev overlay
