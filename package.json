@@ -20,7 +20,7 @@
     "electron:build": "npx vite build && electron-builder",
     "test:watch": "vitest",
     "test:coverage:report": "vitest run --coverage && node scripts/generate-badge.js",
-    "test:ci": "vitest run && jest --coverage --ci --maxWorkers=2",
+    "test:ci": "vitest run && npm run test:ci --prefix backend",
     "check:bundle-budget": "node scripts/check-bundle-budget.mjs",
     "check:doc-links": "node scripts/check-doc-links.mjs",
     "prepare": "husky install",
