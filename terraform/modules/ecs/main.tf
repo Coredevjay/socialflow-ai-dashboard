@@ -253,6 +253,18 @@ resource "aws_ecs_service" "app" {
   desired_count   = var.desired_count
   launch_type     = "FARGATE"
 
+  # Roll back automatically if new tasks keep failing, instead of cycling
+  # them indefinitely. Grace period gives slow-starting tasks (migrations,
+  # warm-up) time to pass ALB health checks before they're killed.
+  deployment_minimum_healthy_percent = 100
+  deployment_maximum_percent         = 200
+  health_check_grace_period_seconds  = 90
+
+  deployment_circuit_breaker {
+    enable   = true
+    rollback = true
+  }
+
   network_configuration {
     subnets         = var.private_subnet_ids
     security_groups = [var.app_sg_id]
