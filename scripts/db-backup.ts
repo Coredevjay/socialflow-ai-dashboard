@@ -8,17 +8,24 @@ import { join } from 'path';
 const DB_URL = process.env.DATABASE_URL;
 const S3_BUCKET = process.env.S3_BACKUP_BUCKET;
 const AWS_REGION = process.env.AWS_REGION || 'us-east-1';
-const RETENTION_DAYS = 30;
+const RETENTION_DAYS = Number(process.env.BACKUP_RETENTION_DAYS || 30);
+const BACKUP_PREFIX = 'backups/db-backup-';
 
 if (!DB_URL || !S3_BUCKET) {
   console.error('DATABASE_URL and S3_BACKUP_BUCKET env vars required');
   process.exit(1);
 }
 
+if (!Number.isInteger(RETENTION_DAYS) || RETENTION_DAYS < 1) {
+  console.error('BACKUP_RETENTION_DAYS must be a positive integer');
+  process.exit(1);
+}
+
 const s3 = new S3Client({ region: AWS_REGION });
-const timestamp = new Date().toISOString().split('T')[0];
+// Full timestamp (with time of day) so multiple runs on the same day never collide
+const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
 const backupFile = `/tmp/db-backup-${timestamp}.sql`;
-const s3Key = `backups/db-backup-${timestamp}.sql`;
+const s3Key = `${BACKUP_PREFIX}${timestamp}.sql`;
 
 async function backup() {
   try {
@@ -58,26 +65,33 @@ async function cleanupOldBackups() {
   const cutoffDate = new Date();
   cutoffDate.setDate(cutoffDate.getDate() - RETENTION_DAYS);
 
-  const { Contents } = await s3.send(
-    new ListObjectsV2Command({
-      Bucket: S3_BUCKET,
-      Prefix: 'backups/',
-    })
-  );
+  let ContinuationToken: string | undefined;
 
-  if (!Contents) return;
+  do {
+    const page = await s3.send(
+      new ListObjectsV2Command({
+        Bucket: S3_BUCKET,
+        Prefix: BACKUP_PREFIX,
+        ContinuationToken,
+      })
+    );
 
-  for (const obj of Contents) {
-    if (obj.LastModified && obj.LastModified < cutoffDate) {
-      await s3.send(
-        new DeleteObjectCommand({
-          Bucket: S3_BUCKET,
-          Key: obj.Key,
-        })
-      );
-      console.log(`Deleted old backup: ${obj.Key}`);
+    for (const obj of page.Contents ?? []) {
+      // Only delete keys this script created, never other objects under backups/
+      if (!obj.Key?.startsWith(BACKUP_PREFIX) || !obj.Key.endsWith('.sql')) continue;
+      if (obj.LastModified && obj.LastModified < cutoffDate) {
+        await s3.send(
+          new DeleteObjectCommand({
+            Bucket: S3_BUCKET,
+            Key: obj.Key,
+          })
+        );
+        console.log(`Deleted old backup: ${obj.Key}`);
+      }
     }
-  }
+
+    ContinuationToken = page.NextContinuationToken;
+  } while (ContinuationToken);
 }
 
 backup();
