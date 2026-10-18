@@ -51,10 +51,17 @@ COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/prisma ./prisma
 COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
 
+# tini as PID 1: forwards signals to node and reaps zombie children (ffmpeg)
+RUN apk add --no-cache tini
+
 USER appuser
 
 EXPOSE 3001
 
 ENV NODE_ENV=production
 
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+  CMD wget -q -O /dev/null "http://127.0.0.1:${BACKEND_PORT:-3001}/health" || exit 1
+
+ENTRYPOINT ["/sbin/tini", "--"]
 CMD ["node", "dist/server.js"]

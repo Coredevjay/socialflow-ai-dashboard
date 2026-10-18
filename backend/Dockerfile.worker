@@ -47,8 +47,12 @@ COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/prisma ./prisma
 COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
 
+# tini as PID 1: forwards signals to node and reaps zombie children (ffmpeg)
+RUN apk add --no-cache tini
+
 USER appuser
 
 ENV NODE_ENV=production
 
+ENTRYPOINT ["/sbin/tini", "--"]
 CMD ["node", "dist/workers/standalone.js"]
