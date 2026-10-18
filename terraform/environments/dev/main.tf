@@ -78,6 +78,11 @@ module "ecs" {
   db_password         = var.db_password
   redis_url           = "rediss://${module.elasticache.primary_endpoint}:6379"
   jwt_secret          = var.jwt_secret
+  jwt_refresh_secret  = var.jwt_refresh_secret
+  csrf_secret         = var.csrf_secret
+  stripe_secret_key   = var.stripe_secret_key
+  twitter_api_key     = var.twitter_api_key
+  twitter_api_secret  = var.twitter_api_secret
   s3_bucket           = module.s3.bucket_name
   aws_region          = var.aws_region
   service_domain      = var.service_domain
