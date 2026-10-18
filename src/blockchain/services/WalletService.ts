@@ -2,6 +2,9 @@
  * WalletService - Manages wallet connections and transactions
  */
 
+import { StrKey } from '@stellar/stellar-sdk';
+import { NETWORKS, NetworkConfig } from '../config/networks';
+
 export interface WalletInfo {
   publicKey: string;
   name: string;
@@ -14,6 +17,42 @@ export interface WalletDisconnectEvent {
 }
 
 type DisconnectListener = (event: WalletDisconnectEvent) => void;
+
+/** Subset of the injected Freighter API used by this service */
+interface FreighterApi {
+  getPublicKey(): Promise<string>;
+  getNetworkDetails?(): Promise<{ networkPassphrase: string }>;
+  signTransaction(xdr: string, opts: { network: string }): Promise<string>;
+  on?(event: string, handler: () => void): void;
+}
+
+/** Subset of the injected Albedo API used by this service */
+interface AlbedoApi {
+  publicKey(): Promise<{ publicKey: string }>;
+  tx(params: { xdr: string; network: string }): Promise<{ signed_envelope_xdr: string }>;
+}
+
+type WalletWindow = Window & { freighter?: FreighterApi; albedo?: AlbedoApi };
+
+const getFreighter = (): FreighterApi | undefined => (window as WalletWindow).freighter;
+const getAlbedo = (): AlbedoApi | undefined => (window as WalletWindow).albedo;
+
+/** Wallet-reported keys are untrusted input: only accept well-formed Stellar account addresses */
+function assertValidPublicKey(key: unknown): string {
+  if (typeof key !== 'string' || !StrKey.isValidEd25519PublicKey(key)) {
+    throw new Error('Wallet returned an invalid Stellar public key');
+  }
+  return key;
+}
+
+/** Resolve a lowercase network name (e.g. "testnet") to its configured Stellar network */
+function resolveNetwork(network: string): NetworkConfig {
+  const config = NETWORKS[network.toUpperCase()];
+  if (!config) {
+    throw new Error(`Unsupported Stellar network: ${network}`);
+  }
+  return config;
+}
 
 export class WalletService {
   private wallet: WalletInfo | null = null;
@@ -28,8 +67,9 @@ export class WalletService {
   async autoConnect(): Promise<WalletInfo | null> {
     try {
       // Try Freighter first
-      if ((window as any).freighter) {
-        const publicKey = await (window as any).freighter.getPublicKey();
+      const freighter = getFreighter();
+      if (freighter) {
+        const publicKey = assertValidPublicKey(await freighter.getPublicKey());
         this.wallet = {
           publicKey,
           name: 'Freighter',
@@ -40,10 +80,11 @@ export class WalletService {
       }
 
       // Try Albedo
-      if ((window as any).albedo) {
-        const result = await (window as any).albedo.publicKey();
+      const albedo = getAlbedo();
+      if (albedo) {
+        const result = await albedo.publicKey();
         this.wallet = {
-          publicKey: result.publicKey,
+          publicKey: assertValidPublicKey(result.publicKey),
           name: 'Albedo',
           isConnected: true,
         };
@@ -67,11 +108,9 @@ export class WalletService {
     this.isListeningForDisconnect = true;
 
     // Listen for Freighter disconnect
-    if ((window as any).freighter) {
-      (window as any).freighter.on?.('disconnect', () => {
-        this.handleDisconnect();
-      });
-    }
+    getFreighter()?.on?.('disconnect', () => {
+      this.handleDisconnect();
+    });
 
     // Store the bound handler so it can be removed in disconnect()
     this.boundVisibilityHandler = () => {
@@ -91,8 +130,9 @@ export class WalletService {
     if (!this.wallet) return;
 
     try {
-      if ((window as any).freighter) {
-        const publicKey = await (window as any).freighter.getPublicKey();
+      const freighter = getFreighter();
+      if (freighter) {
+        const publicKey = await freighter.getPublicKey();
         if (publicKey !== this.wallet.publicKey) {
           this.handleDisconnect();
         }
@@ -115,7 +155,7 @@ export class WalletService {
 
     this.wallet = null;
     this.disconnectListeners.forEach(listener => listener(event));
-    
+
     // Remove the visibilitychange listener to prevent leaks
     if (this.boundVisibilityHandler) {
       window.removeEventListener('visibilitychange', this.boundVisibilityHandler);
@@ -133,14 +173,24 @@ export class WalletService {
     }
 
     try {
-      if ((window as any).freighter) {
-        return await (window as any).freighter.signTransaction(xdr, {
+      const freighter = getFreighter();
+      if (freighter) {
+        // Refuse to sign unless the wallet is on the same network we are targeting
+        const expected = resolveNetwork(network);
+        const details = await freighter.getNetworkDetails?.();
+        if (details?.networkPassphrase !== expected.networkPassphrase) {
+          throw new Error(`Wallet network does not match ${expected.name}`);
+        }
+
+        return await freighter.signTransaction(xdr, {
           network,
         });
       }
 
-      if ((window as any).albedo) {
-        const result = await (window as any).albedo.tx({
+      const albedo = getAlbedo();
+      if (albedo) {
+        resolveNetwork(network);
+        const result = await albedo.tx({
           xdr,
           network,
         });
