@@ -71,6 +71,7 @@ jobs:
           chmod 600 ~/.kube/config
 
       - name: Deploy to Kubernetes
+        id: deploy
         # -----------------------------------------------------------------------
         # Issue #1598 — [High] Staging CD pipeline updates socialflow-backend
         # deployment image but never touches socialflow-worker
@@ -156,6 +157,24 @@ jobs:
           # kubectl rollout status deployment/socialflow-worker \
           #   --namespace=staging \
           #   --timeout=120s
+
+      - name: Roll back failed staging deploy
+        # Runs only when the Deploy step itself failed (failed or timed-out rollout).
+        # Pod logs are captured before the undo, since the undo replaces the failing pods.
+        if: ${{ failure() && steps.deploy.outcome == 'failure' }}
+        run: |
+          echo "::group::Failing pod logs (socialflow-backend)"
+          kubectl logs deployment/socialflow-backend \
+            --namespace=staging \
+            --all-containers \
+            --tail=200 || true
+          kubectl get pods --namespace=staging -o wide || true
+          echo "::endgroup::"
+          kubectl rollout undo deployment/socialflow-backend \
+            --namespace=staging
+          kubectl rollout status deployment/socialflow-backend \
+            --namespace=staging \
+            --timeout=120s
 
       - name: Smoke test /health
         run: |
