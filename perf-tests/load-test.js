@@ -1,7 +1,7 @@
 import http from 'k6/http';
 import { check, sleep } from 'k6';
 
-const BASE_URL = __ENV.BASE_URL || 'http://localhost:3000/api/v1';
+const BASE_URL = __ENV.BASE_URL || 'http://localhost:3001/api/v1';
 const TOKEN = __ENV.AUTH_TOKEN || '';
 
 const headers = {
@@ -18,7 +18,7 @@ export const options = {
       vus: 1,
       duration: '30s',
       tags: { scenario: 'smoke' },
-      env: { SCENARIO: 'smoke' },
+      exec: 'default',
     },
     load: {
       executor: 'ramping-vus',
@@ -29,7 +29,7 @@ export const options = {
         { duration: '1m', target: 0 },
       ],
       tags: { scenario: 'load' },
-      env: { SCENARIO: 'load' },
+      exec: 'default',
       startTime: '35s', // starts after smoke finishes
     },
     ai_concurrency: {
@@ -41,9 +41,8 @@ export const options = {
         { duration: '10s', target: 0 },
       ],
       tags: { scenario: 'ai_concurrency' },
-      env: { SCENARIO: 'ai_concurrency' },
-      startTime: '35s',
       exec: 'aiConcurrencyScenario',
+      startTime: '5m40s', // starts after load ends (35s + 5m) so thresholds aren't skewed
     },
   },
   thresholds: {
