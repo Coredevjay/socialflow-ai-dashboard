@@ -32,12 +32,6 @@ variable "db_username" {
   type        = string
 }
 
-variable "db_password" {
-  description = "Master password for the RDS instance; supply via a secret store, never commit it"
-  type        = string
-  sensitive   = true
-}
-
 variable "instance_class" {
   description = "RDS instance class (e.g. db.t3.micro for dev, db.t3.medium or larger for prod)"
   type        = string

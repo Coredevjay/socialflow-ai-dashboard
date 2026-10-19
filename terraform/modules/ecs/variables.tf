@@ -152,3 +152,8 @@ variable "twitter_api_secret" {
   type        = string
   sensitive   = true
 }
+
+variable "db_master_user_secret_arn" {
+  description = "ARN of the Secrets Manager secret holding the RDS master password (module.rds.master_user_secret_arn)"
+  type        = string
+}
