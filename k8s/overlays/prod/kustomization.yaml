@@ -14,6 +14,9 @@ images:
   - name: socialflow-backend
     newName: socialflow-backend
     newTag: latest  # overridden by CI: kustomize edit set image socialflow-backend=<registry>/socialflow-backend:<git-sha>
+  - name: socialflow-worker
+    newName: socialflow-worker
+    newTag: latest  # overridden by CI: kustomize edit set image socialflow-worker=<registry>/socialflow-worker:<git-sha>
 
 patches:
   # 3 replicas, production-grade resources

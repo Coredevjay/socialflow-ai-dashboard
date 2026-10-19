@@ -84,7 +84,6 @@ backend/uploads/
 *.tfvars
 !*.tfvars.example
 .terraform/
-.terraform.lock.hcl
 
 # Project Tracking
 Somzilla.md

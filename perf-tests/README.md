@@ -18,12 +18,8 @@ sudo apt-get update && sudo apt-get install k6
 ## Running
 
 ```bash
-# Smoke test only (1 VU, 30s)
-BASE_URL=http://localhost:3000/api/v1 AUTH_TOKEN=<your_token> \
-  k6 run --env SCENARIO=smoke perf-tests/load-test.js
-
-# Full run (smoke + load)
-BASE_URL=http://localhost:3000/api/v1 AUTH_TOKEN=<your_token> \
+# Full run (smoke → load → ai_concurrency, ~7 min total)
+BASE_URL=http://localhost:3001/api/v1 AUTH_TOKEN=<your_token> \
   k6 run perf-tests/load-test.js
 
 # Output results to JSON for baseline tracking
@@ -32,10 +28,13 @@ k6 run --out json=perf-tests/results.json perf-tests/load-test.js
 
 ## Scenarios
 
-| Scenario | VUs | Duration | Purpose |
-|----------|-----|----------|---------|
-| smoke    | 1   | 30s      | Verify endpoints respond correctly |
-| load     | 0→20→0 | 5m  | Measure throughput and latency under realistic load |
+Scenarios run in sequence via `startTime` so they don't overlap:
+
+| Scenario | Start | VUs | Duration | Exec | Purpose |
+|----------|-------|-----|----------|------|---------|
+| smoke    | 0s    | 1   | 30s      | `default` | Verify endpoints respond correctly |
+| load     | 35s   | 0→20→0 | 5m  | `default` | Measure throughput and latency under realistic load |
+| ai_concurrency | 5m40s | 1→50→0 | 100s | `aiConcurrencyScenario` | AI endpoint concurrency (p95 < 5s) |
 
 ## Thresholds
 
@@ -50,6 +49,12 @@ k6 run --out json=perf-tests/results.json perf-tests/load-test.js
 - `GET /api/v1/health` — baseline availability
 - `POST /api/v1/ai/analyze-image` — AI content generation
 - `POST /api/v1/tiktok/upload` — post publishing
+
+## CI
+
+`.github/workflows/k6-load-test.yml` runs this script nightly (02:00 UTC) and on manual dispatch. It starts the backend against a Postgres service container, runs k6, and uploads the `k6-summary.json` artifact. Threshold failures fail the job.
+
+The job needs a repository secret `K6_AUTH_TOKEN` holding a valid bearer token. Without it, the k6 step is skipped and a notice is emitted.
 
 ## Baseline Results
 

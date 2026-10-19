@@ -92,6 +92,7 @@ jest.mock('@google/genai', () => ({
 
 // ── Imports ───────────────────────────────────────────────────────────────────
 
+import { ValidationError } from '../lib/errors';
 import { PLAN_CREDITS } from '../models/Subscription';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -148,6 +149,28 @@ describe('BillingService.deductCreditsForTokens', () => {
       'Insufficient credits. Required: 50, available: 10',
     );
   });
+
+  it.each([
+    ['zero', 0],
+    ['negative', -5],
+    ['NaN', NaN],
+    ['Infinity', Infinity],
+    ['-Infinity', -Infinity],
+    ['fractional', 2.5],
+  ])(
+    'throws ValidationError and does not touch database when tokens is %s (%p)',
+    async (_label, invalidTokens) => {
+      const userId = 'user-invalid-tokens';
+      provisionUser(userId, 500);
+      mockPrisma.$transaction.mockClear();
+
+      await expect(service.deductCreditsForTokens(userId, invalidTokens)).rejects.toThrow(
+        ValidationError,
+      );
+      expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+      expect((mockSubscriptionState as { creditsRemaining: number }).creditsRemaining).toBe(500);
+    },
+  );
 });
 
 // ── AIService integration tests ───────────────────────────────────────────────

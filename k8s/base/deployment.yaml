@@ -39,10 +39,12 @@ spec:
         runAsUser: 1000
         fsGroup: 1000
       initContainers:
-        - name: migrate
+        # Read-only gate: fails if migrations are pending, so pods never serve a
+        # schema mismatch. Migrations themselves run once via migration-job.yaml.
+        - name: migrate-check
           image: socialflow-backend:latest
           imagePullPolicy: Always
-          command: ["npx", "prisma", "migrate", "deploy"]
+          command: ["npx", "prisma", "migrate", "status"]
           envFrom:
             - configMapRef:
                 name: socialflow-config
@@ -67,6 +69,15 @@ spec:
                 name: socialflow-config
             - secretRef:
                 name: socialflow-secrets
+          env:
+            # Data pruning must NOT run in-process: the repeatable BullMQ job
+            # would prune paths on whichever pod's ephemeral container
+            # filesystem happened to pick it up, leaving files on other
+            # replicas unpruned. Pruning runs instead via the dedicated
+            # Kubernetes CronJob (k8s/base/data-pruning-cronjob.yaml), which
+            # mounts the shared volume and prunes it once per schedule.
+            - name: DATA_PRUNING_IN_PROCESS_ENABLED
+              value: "false"
           lifecycle:
             preStop:
               exec:

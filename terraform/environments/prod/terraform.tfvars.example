@@ -1,0 +1,12 @@
+# Copy to terraform.tfvars and set the environment-specific values below.
+# service_domain and hosted_zone_id have no default and must be supplied.
+
+aws_region  = "us-east-1"
+db_name     = "socialflow"
+db_username = "socialflow"
+
+# Public domain for the service (valid FQDN, e.g. api.socialflow.ai)
+service_domain = "api.example.com"
+
+# Route53 hosted zone ID that contains service_domain (starts with "Z")
+hosted_zone_id = "Z0123456789ABCDEFGHIJ"

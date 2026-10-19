@@ -4,7 +4,6 @@ import { createAdapter } from '@socket.io/redis-adapter';
 import Redis from 'ioredis';
 import jwt from 'jsonwebtoken';
 import { createLogger } from '../lib/logger';
-import { config } from '../config/config';
 import { corsOptions } from '../config/cors';
 import { getRedisConnection } from '../config/runtime';
 import { eventBus, JobProgressEvent } from '../lib/eventBus';
@@ -42,7 +41,7 @@ export class SocketService {
   public initialize(httpServer: HttpServer): void {
     this.io = new Server(httpServer, {
       cors: {
-        origin: config.NODE_ENV === 'production' ? corsOptions.origin : '*',
+        origin: corsOptions.origin,
         methods: ['GET', 'POST'],
       },
     });

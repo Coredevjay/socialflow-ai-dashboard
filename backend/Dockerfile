@@ -4,7 +4,7 @@
 #   docker build -f backend/Dockerfile backend/
 
 # ── Stage 1: build ───────────────────────────────────────────────────────────
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS builder
 
 WORKDIR /app
 
@@ -28,7 +28,7 @@ RUN node_modules/.bin/tsc --skipLibCheck && \
     test -d dist && echo "Build succeeded" || (echo "Build failed: dist/ not created" && exit 1)
 
 # ── Stage 2: production image ─────────────────────────────────────────────────
-FROM node:20-alpine AS runner
+FROM node:22-alpine AS runner
 
 # Non-root user for security
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup
@@ -51,10 +51,17 @@ COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/prisma ./prisma
 COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
 
+# tini as PID 1: forwards signals to node and reaps zombie children (ffmpeg)
+RUN apk add --no-cache tini
+
 USER appuser
 
 EXPOSE 3001
 
 ENV NODE_ENV=production
 
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+  CMD wget -q -O /dev/null "http://127.0.0.1:${BACKEND_PORT:-3001}/health" || exit 1
+
+ENTRYPOINT ["/sbin/tini", "--"]
 CMD ["node", "dist/server.js"]

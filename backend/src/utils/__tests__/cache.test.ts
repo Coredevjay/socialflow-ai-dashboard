@@ -227,6 +227,44 @@ describe('invalidateCache()', () => {
     expect(mockPipeline.del).toHaveBeenCalledWith('cache:org:5');
     expect(mockPipeline.del).toHaveBeenCalledWith('cache:post:7');
   });
+
+  it('expands glob patterns through SCAN and deletes every match', async () => {
+    store.set('cache:org:1:posts', 'a');
+    store.set('cache:org:1:users', 'b');
+    store.set('cache:org:2:posts', 'c');
+
+    await invalidateCache('org:1:*');
+
+    expect(store.has('cache:org:1:posts')).toBe(false);
+    expect(store.has('cache:org:1:users')).toBe(false);
+    expect(store.has('cache:org:2:posts')).toBe(true);
+    expect(mockRedis.scan).toHaveBeenCalledWith('0', 'MATCH', 'cache:org:1:*', 'COUNT', 100);
+    expect(mockRedis.unlink).toHaveBeenCalled();
+  });
+
+  it('handles literal and glob keys in the same call', async () => {
+    store.set('cache:user:1', '{"id":1}');
+    store.set('cache:org:1:posts', 'a');
+    store.set('cache:org:1:users', 'b');
+
+    await invalidateCache('user:1', 'org:1:*');
+
+    expect(store.has('cache:user:1')).toBe(false);
+    expect(store.has('cache:org:1:posts')).toBe(false);
+    expect(store.has('cache:org:1:users')).toBe(false);
+    expect(mockPipeline.del).toHaveBeenCalledWith('cache:user:1');
+    expect(mockPipeline.del).not.toHaveBeenCalledWith('cache:org:1:*');
+  });
+
+  it('is a no-op for a glob that matches nothing', async () => {
+    store.set('cache:user:1', '{"id":1}');
+
+    await expect(invalidateCache('missing:*')).resolves.toBeUndefined();
+
+    expect(store.has('cache:user:1')).toBe(true);
+    expect(mockRedis.unlink).not.toHaveBeenCalled();
+    expect(mockRedis.pipeline).not.toHaveBeenCalled();
+  });
 });
 
 // ── invalidateCachePattern ────────────────────────────────────────────────────
@@ -273,5 +311,18 @@ describe('invalidateCachePattern()', () => {
     store.set('cache:session:c', '3');
     await invalidateCachePattern('session:*');
     expect(store.size).toBe(0);
+  });
+
+  it('unlinks each SCAN page as it is read instead of buffering the keyspace', async () => {
+    mockRedis.scan.mockImplementation(async (cursor: string) => {
+      if (cursor === '0') return ['7', ['cache:batch:a', 'cache:batch:b']] as [string, string[]];
+      return ['0', ['cache:batch:c']] as [string, string[]];
+    });
+
+    await invalidateCachePattern('batch:*');
+
+    expect(mockRedis.scan).toHaveBeenCalledTimes(2);
+    expect(mockRedis.unlink).toHaveBeenNthCalledWith(1, 'cache:batch:a', 'cache:batch:b');
+    expect(mockRedis.unlink).toHaveBeenNthCalledWith(2, 'cache:batch:c');
   });
 });

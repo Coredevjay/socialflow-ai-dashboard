@@ -10,17 +10,21 @@ concurrency:
   # Never cancel an in-flight staging deploy: a half-finished kubectl rollout is worse than a late one.
   cancel-in-progress: ${{ github.ref != 'refs/heads/staging' }}
 
+permissions:
+  contents: read
+
 jobs:
   ci:
     name: Continuous Integration
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
-          node-version: "20"
+          node-version: "22"
           cache: "npm"
 
       - name: Install Dependencies
@@ -37,6 +41,7 @@ jobs:
     needs: ci
     if: github.event_name == 'push' && github.ref == 'refs/heads/staging'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     environment:
       name: staging
     permissions:
@@ -47,27 +52,52 @@ jobs:
       TAG: ${{ github.sha }}
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push Docker image
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image for scanning
         uses: docker/build-push-action@v6
         with:
           context: ./backend
           file: backend/Dockerfile
+          push: false
+          load: true
+          tags: ${{ env.IMAGE }}:${{ env.TAG }}
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+
+      - name: Scan Docker image with Trivy
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ env.IMAGE }}:${{ env.TAG }}
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: ./backend
+          file: backend/Dockerfile
           push: true
-          tags: |
-            ${{ env.IMAGE }}:${{ env.TAG }}
-            ${{ env.IMAGE }}:latest
+          provenance: mode=max
+          sbom: true
+          # Only the immutable commit SHA tag is published; no mutable :latest
+          tags: ${{ env.IMAGE }}:${{ env.TAG }}
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
 
       - name: Set up kubectl
-        uses: azure/setup-kubectl@v3
+        uses: azure/setup-kubectl@901a10e89ea615cf61f57ac05cecdf23e7de06d8 # v3
 
       - name: Configure kubeconfig
         run: |
@@ -76,6 +106,7 @@ jobs:
           chmod 600 ~/.kube/config
 
       - name: Deploy to Kubernetes
+        id: deploy
         # -----------------------------------------------------------------------
         # Issue #1598 — [High] Staging CD pipeline updates socialflow-backend
         # deployment image but never touches socialflow-worker
@@ -107,7 +138,7 @@ jobs:
         #      TAG: ${{ github.sha }}
         #
         #    - name: Build and push worker Docker image
-        #      uses: docker/build-push-action@v6
+        #      uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         #      with:
         #        context: ./backend
         #        file: backend/Dockerfile.worker
@@ -148,7 +179,16 @@ jobs:
         #     3. Extend "Deploy to Kubernetes" step with worker kubectl commands
         # -----------------------------------------------------------------------
         run: |
+          # Run migrations once, before any backend pod is rolled out.
+          kubectl delete job socialflow-migrate --namespace=staging --ignore-not-found
+          sed "s|image: socialflow-backend:latest|image: ${IMAGE}:${TAG}|" k8s/base/migration-job.yaml \
+            | kubectl apply --namespace=staging -f -
+          kubectl wait job/socialflow-migrate \
+            --for=condition=complete \
+            --namespace=staging \
+            --timeout=300s
           kubectl set image deployment/socialflow-backend \
+            migrate=${{ env.IMAGE }}:${{ env.TAG }} \
             backend=${{ env.IMAGE }}:${{ env.TAG }} \
             --namespace=staging
           kubectl rollout status deployment/socialflow-backend \
@@ -162,10 +202,29 @@ jobs:
           #   --namespace=staging \
           #   --timeout=120s
 
-      - name: Smoke test /health
+      - name: Roll back failed staging deploy
+        # Runs only when the Deploy step itself failed (failed or timed-out rollout).
+        # Pod logs are captured before the undo, since the undo replaces the failing pods.
+        if: ${{ failure() && steps.deploy.outcome == 'failure' }}
         run: |
-          BACKEND_URL="${{ secrets.STAGING_BACKEND_URL }}"
+          echo "::group::Failing pod logs (socialflow-backend)"
+          kubectl logs deployment/socialflow-backend \
+            --namespace=staging \
+            --all-containers \
+            --tail=200 || true
+          kubectl get pods --namespace=staging -o wide || true
+          echo "::endgroup::"
+          kubectl rollout undo deployment/socialflow-backend \
+            --namespace=staging
+          kubectl rollout status deployment/socialflow-backend \
+            --namespace=staging \
+            --timeout=120s
+
+      - name: Smoke test /health
+        env:
+          BACKEND_URL: ${{ secrets.STAGING_BACKEND_URL }}
+        run: |
           echo "Polling ${BACKEND_URL}/health ..."
           timeout 120 bash -c \
-            'until curl -sf "${BACKEND_URL}/health"; do echo "waiting..."; sleep 5; done'
+            'until curl -sf --max-time 10 "${BACKEND_URL}/health"; do echo "waiting..."; sleep 5; done'
           echo "Health check passed"

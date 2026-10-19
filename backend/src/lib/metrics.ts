@@ -112,6 +112,13 @@ export const dataPruningErrorsTotal = new Counter({
   registers: [register],
 });
 
+export const moderationBypassTotal = new Counter({
+  name: 'moderation_bypass_total',
+  help: 'Total number of content moderation bypasses',
+  labelNames: ['mode', 'reason'] as const,
+  registers: [register],
+});
+
 /**
  * Total webhook dispatch attempts (success or failure).
  * Serves as the denominator for the webhook delivery failure-rate SLI:

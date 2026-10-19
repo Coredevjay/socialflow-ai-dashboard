@@ -18,6 +18,40 @@ resource "aws_iam_role_policy_attachment" "task_execution" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
+# The managed policy does not cover SSM parameter reads, so ECS cannot resolve
+# the `secrets` above without this. Scoped to this environment's parameter path.
+resource "aws_iam_role_policy" "task_execution_ssm" {
+  name = "ssm-secrets-access"
+  role = aws_iam_role.task_execution.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["ssm:GetParameters"]
+        Resource = ["arn:aws:ssm:${var.aws_region}:*:parameter/socialflow/${var.env}/*"]
+      },
+      {
+        # Needed to decrypt SecureString values; limited to calls made via SSM.
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt"]
+        Resource = ["*"]
+        Condition = {
+          StringEquals = {
+            "kms:ViaService" = "ssm.${var.aws_region}.amazonaws.com"
+          }
+        }
+      },
+      {
+        # Scoped to the single RDS-managed master password secret.
+        Effect   = "Allow"
+        Action   = ["secretsmanager:GetSecretValue"]
+        Resource = [var.db_master_user_secret_arn]
+      }
+    ]
+  })
+}
+
 resource "aws_iam_role" "task" {
   name               = "socialflow-${var.env}-ecs-task"
   assume_role_policy = data.aws_iam_policy_document.ecs_assume.json
@@ -79,9 +113,15 @@ resource "aws_ecs_task_definition" "app" {
       { name = "DB_PORT",      valueFrom = aws_ssm_parameter.db_port.arn },
       { name = "DB_NAME",      valueFrom = aws_ssm_parameter.db_name.arn },
       { name = "DB_USER",      valueFrom = aws_ssm_parameter.db_user.arn },
-      { name = "DB_PASSWORD",  valueFrom = aws_ssm_parameter.db_password.arn },
+      # Reads the `password` key of the RDS-managed Secrets Manager secret.
+      { name = "DB_PASSWORD",  valueFrom = "${var.db_master_user_secret_arn}:password::" },
       { name = "REDIS_URL",    valueFrom = aws_ssm_parameter.redis_url.arn },
-      { name = "JWT_SECRET",   valueFrom = aws_ssm_parameter.jwt_secret.arn }
+      { name = "JWT_SECRET",   valueFrom = aws_ssm_parameter.jwt_secret.arn },
+      { name = "JWT_REFRESH_SECRET", valueFrom = aws_ssm_parameter.jwt_refresh_secret.arn },
+      { name = "CSRF_SECRET",        valueFrom = aws_ssm_parameter.csrf_secret.arn },
+      { name = "STRIPE_SECRET_KEY",  valueFrom = aws_ssm_parameter.stripe_secret_key.arn },
+      { name = "TWITTER_API_KEY",    valueFrom = aws_ssm_parameter.twitter_api_key.arn },
+      { name = "TWITTER_API_SECRET", valueFrom = aws_ssm_parameter.twitter_api_secret.arn }
     ]
     logConfiguration = {
       logDriver = "awslogs"
@@ -92,7 +132,7 @@ resource "aws_ecs_task_definition" "app" {
       }
     }
     healthCheck = {
-      command     = ["CMD-SHELL", "curl -f http://localhost:${var.container_port}/health || exit 1"]
+      command     = ["CMD-SHELL", "node -e \"fetch('http://localhost:${var.container_port}/health').then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))\""]
       interval    = 30
       timeout     = 5
       retries     = 3
@@ -125,15 +165,6 @@ resource "aws_ssm_parameter" "db_user" {
   value = var.db_username
 }
 
-# The password is stored on its own, never concatenated into a connection
-# string with the host/user/db name — keeps a single Terraform-tracked
-# attribute from ever holding the whole secret.
-resource "aws_ssm_parameter" "db_password" {
-  name  = "/socialflow/${var.env}/DB_PASSWORD"
-  type  = "SecureString"
-  value = var.db_password
-}
-
 resource "aws_ssm_parameter" "redis_url" {
   name  = "/socialflow/${var.env}/REDIS_URL"
   type  = "SecureString"
@@ -144,6 +175,36 @@ resource "aws_ssm_parameter" "jwt_secret" {
   name  = "/socialflow/${var.env}/JWT_SECRET"
   type  = "SecureString"
   value = var.jwt_secret
+}
+
+resource "aws_ssm_parameter" "jwt_refresh_secret" {
+  name  = "/socialflow/${var.env}/JWT_REFRESH_SECRET"
+  type  = "SecureString"
+  value = var.jwt_refresh_secret
+}
+
+resource "aws_ssm_parameter" "csrf_secret" {
+  name  = "/socialflow/${var.env}/CSRF_SECRET"
+  type  = "SecureString"
+  value = var.csrf_secret
+}
+
+resource "aws_ssm_parameter" "stripe_secret_key" {
+  name  = "/socialflow/${var.env}/STRIPE_SECRET_KEY"
+  type  = "SecureString"
+  value = var.stripe_secret_key
+}
+
+resource "aws_ssm_parameter" "twitter_api_key" {
+  name  = "/socialflow/${var.env}/TWITTER_API_KEY"
+  type  = "SecureString"
+  value = var.twitter_api_key
+}
+
+resource "aws_ssm_parameter" "twitter_api_secret" {
+  name  = "/socialflow/${var.env}/TWITTER_API_SECRET"
+  type  = "SecureString"
+  value = var.twitter_api_secret
 }
 
 resource "aws_security_group" "alb" {
@@ -174,13 +235,76 @@ resource "aws_security_group" "alb" {
   tags = { Name = "socialflow-${var.env}-alb-sg" }
 }
 
+data "aws_caller_identity" "current" {}
+
+resource "aws_s3_bucket" "alb_logs" {
+  bucket        = "socialflow-${var.env}-alb-logs-${data.aws_caller_identity.current.account_id}"
+  force_destroy = var.env == "dev"
+  tags          = { Env = var.env }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "alb_logs" {
+  bucket = aws_s3_bucket.alb_logs.id
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "alb_logs" {
+  bucket                  = aws_s3_bucket.alb_logs.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "alb_logs" {
+  bucket = aws_s3_bucket.alb_logs.id
+
+  rule {
+    id     = "expire-access-logs"
+    status = "Enabled"
+    filter {}
+    expiration { days = var.env == "prod" ? 90 : 30 }
+  }
+}
+
+data "aws_iam_policy_document" "alb_logs" {
+  statement {
+    principals {
+      type        = "Service"
+      identifiers = ["logdelivery.elasticloadbalancing.amazonaws.com"]
+    }
+    actions   = ["s3:PutObject"]
+    resources = ["${aws_s3_bucket.alb_logs.arn}/alb/AWSLogs/${data.aws_caller_identity.current.account_id}/*"]
+  }
+}
+
+resource "aws_s3_bucket_policy" "alb_logs" {
+  bucket = aws_s3_bucket.alb_logs.id
+  policy = data.aws_iam_policy_document.alb_logs.json
+}
+
 resource "aws_lb" "main" {
-  name               = "socialflow-${var.env}-alb"
-  internal           = false
-  load_balancer_type = "application"
-  security_groups    = [aws_security_group.alb.id]
-  subnets            = var.public_subnet_ids
-  tags               = { Env = var.env }
+  name                       = "socialflow-${var.env}-alb"
+  internal                   = false
+  load_balancer_type         = "application"
+  security_groups            = [aws_security_group.alb.id]
+  subnets                    = var.public_subnet_ids
+  drop_invalid_header_fields = true
+  enable_deletion_protection = var.env == "prod"
+  idle_timeout               = 60
+  tags                       = { Env = var.env }
+
+  access_logs {
+    bucket  = aws_s3_bucket.alb_logs.id
+    prefix  = "alb"
+    enabled = true
+  }
+
+  depends_on = [aws_s3_bucket_policy.alb_logs]
 }
 
 resource "aws_lb_target_group" "app" {
@@ -253,6 +377,18 @@ resource "aws_ecs_service" "app" {
   desired_count   = var.desired_count
   launch_type     = "FARGATE"
 
+  # Roll back automatically if new tasks keep failing, instead of cycling
+  # them indefinitely. Grace period gives slow-starting tasks (migrations,
+  # warm-up) time to pass ALB health checks before they're killed.
+  deployment_minimum_healthy_percent = 100
+  deployment_maximum_percent         = 200
+  health_check_grace_period_seconds  = 90
+
+  deployment_circuit_breaker {
+    enable   = true
+    rollback = true
+  }
+
   network_configuration {
     subnets         = var.private_subnet_ids
     security_groups = [var.app_sg_id]
@@ -264,5 +400,71 @@ resource "aws_ecs_service" "app" {
     container_port   = var.container_port
   }
 
+  # Auto scaling owns the running task count after the first apply; without
+  # this, every terraform apply would reset it to var.desired_count.
+  lifecycle {
+    ignore_changes = [desired_count]
+  }
+
   depends_on = [aws_lb_listener.https]
+}
+
+resource "aws_appautoscaling_target" "app" {
+  service_namespace  = "ecs"
+  resource_id        = "service/${aws_ecs_cluster.main.name}/${aws_ecs_service.app.name}"
+  scalable_dimension = "ecs:service:DesiredCount"
+  min_capacity       = var.min_capacity
+  max_capacity       = var.max_capacity
+}
+
+resource "aws_appautoscaling_policy" "cpu" {
+  name               = "socialflow-${var.env}-cpu-target-tracking"
+  policy_type        = "TargetTrackingScaling"
+  service_namespace  = aws_appautoscaling_target.app.service_namespace
+  resource_id        = aws_appautoscaling_target.app.resource_id
+  scalable_dimension = aws_appautoscaling_target.app.scalable_dimension
+
+  target_tracking_scaling_policy_configuration {
+    predefined_metric_specification {
+      predefined_metric_type = "ECSServiceAverageCPUUtilization"
+    }
+    target_value       = 60
+    scale_in_cooldown  = 300
+    scale_out_cooldown = 60
+  }
+}
+
+resource "aws_appautoscaling_policy" "memory" {
+  name               = "socialflow-${var.env}-memory-target-tracking"
+  policy_type        = "TargetTrackingScaling"
+  service_namespace  = aws_appautoscaling_target.app.service_namespace
+  resource_id        = aws_appautoscaling_target.app.resource_id
+  scalable_dimension = aws_appautoscaling_target.app.scalable_dimension
+
+  target_tracking_scaling_policy_configuration {
+    predefined_metric_specification {
+      predefined_metric_type = "ECSServiceAverageMemoryUtilization"
+    }
+    target_value       = 70
+    scale_in_cooldown  = 300
+    scale_out_cooldown = 60
+  }
+}
+
+resource "aws_appautoscaling_policy" "alb_requests" {
+  name               = "socialflow-${var.env}-alb-request-target-tracking"
+  policy_type        = "TargetTrackingScaling"
+  service_namespace  = aws_appautoscaling_target.app.service_namespace
+  resource_id        = aws_appautoscaling_target.app.resource_id
+  scalable_dimension = aws_appautoscaling_target.app.scalable_dimension
+
+  target_tracking_scaling_policy_configuration {
+    predefined_metric_specification {
+      predefined_metric_type = "ALBRequestCountPerTarget"
+      resource_label         = "${aws_lb.main.arn_suffix}/${aws_lb_target_group.app.arn_suffix}"
+    }
+    target_value       = 1000
+    scale_in_cooldown  = 300
+    scale_out_cooldown = 60
+  }
 }

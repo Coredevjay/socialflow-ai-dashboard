@@ -20,7 +20,12 @@ optional settings.
 - `aws_s3_bucket_versioning` — versioning configuration for the bucket.
 - `aws_s3_bucket_public_access_block` — blocks all forms of public access.
 - `aws_s3_bucket_lifecycle_configuration` — optional lifecycle rules for
-  object expiration and noncurrent version cleanup.
+  object expiration, noncurrent version cleanup, and incomplete multipart
+  upload cleanup.
+- `aws_s3_bucket_policy` — denies all requests made without TLS
+  (`aws:SecureTransport = false`).
+- `aws_s3_bucket_logging` — server access logging, created only when
+  `logging_target_bucket` is set.
 
 ## Inputs
 

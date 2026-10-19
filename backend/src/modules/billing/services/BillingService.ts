@@ -1,6 +1,7 @@
 import Stripe from 'stripe';
 import { randomUUID } from 'crypto';
 import { createLogger } from '../lib/logger';
+import { config } from '../../../config/config';
 import {
   Subscription,
   SubscriptionStore,
@@ -161,8 +162,8 @@ export class BillingService {
 
   /** Handle incoming Stripe webhook events */
   public async handleWebhook(rawBody: Buffer, signature: string): Promise<void> {
-    const secret = process.env.STRIPE_WEBHOOK_SECRET;
-    if (!secret) throw new Error('STRIPE_WEBHOOK_SECRET is not set');
+    // Presence of the secret is enforced by config validation when billing is enabled.
+    const secret = config.stripe.webhookSecret;
 
     let event: Stripe.Event;
     try {

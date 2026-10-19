@@ -3,10 +3,35 @@ import { authenticate as authMiddleware } from '../middleware/authenticate';
 import { checkPermission } from '../middleware/checkPermission';
 import { jobMonitor, JobStatus } from '../services/jobMonitor';
 import { createLogger } from '../lib/logger';
+import { getConfiguredQueueNames } from '../config/runtime';
 
 const logger = createLogger('jobs-route');
 
 const router = Router();
+
+const MAX_PAGE_SIZE = 100;
+const JOB_STATUSES: readonly JobStatus[] = ['waiting', 'active', 'completed', 'failed', 'delayed', 'paused'];
+
+function parseIntParam(v: unknown, fallback: number): number | null {
+  if (v === undefined || v === '') return fallback;
+  if (typeof v !== 'string' || !/^\d+$/.test(v)) return null;
+  return parseInt(v, 10);
+}
+
+/** Returns a validated window or sends 400 and returns null. */
+function parseWindow(req: Request, res: Response): { start: number; end: number } | null {
+  const start = parseIntParam(req.query.start, 0);
+  const end = parseIntParam(req.query.end, 20);
+  if (start === null || end === null || end < start) {
+    res.status(400).json({ error: 'start and end must be non-negative integers with end >= start' });
+    return null;
+  }
+  return { start, end: Math.min(end, start + MAX_PAGE_SIZE - 1) };
+}
+
+function isKnownQueue(queue: string): boolean {
+  return getConfiguredQueueNames().includes(queue);
+}
 
 /**
  * @openapi
@@ -117,9 +142,16 @@ router.get('/jobs/:queue/stats', async (req: Request, res: Response) => {
 router.get('/jobs/:queue/jobs', async (req: Request, res: Response) => {
   try {
     const { queue } = req.params;
-    const status = (req.query.status as JobStatus) || 'waiting';
-    const start = parseInt(req.query.start as string) || 0;
-    const end = parseInt(req.query.end as string) || 20;
+    if (!isKnownQueue(queue)) {
+      return res.status(404).json({ error: 'Queue not found' });
+    }
+    const status = (req.query.status ?? 'waiting') as JobStatus;
+    if (typeof status !== 'string' || !JOB_STATUSES.includes(status)) {
+      return res.status(400).json({ error: `status must be one of: ${JOB_STATUSES.join(', ')}` });
+    }
+    const window = parseWindow(req, res);
+    if (!window) return;
+    const { start, end } = window;
 
     const jobs = await jobMonitor.getJobs(queue, status, start, end);
     res.json({ jobs, count: jobs.length, status, start, end });
@@ -216,8 +248,12 @@ router.get('/jobs/:queue/jobs/:jobId', async (req: Request, res: Response) => {
 router.get('/jobs/:queue/failed', async (req: Request, res: Response) => {
   try {
     const { queue } = req.params;
-    const start = parseInt(req.query.start as string) || 0;
-    const end = parseInt(req.query.end as string) || 20;
+    if (!isKnownQueue(queue)) {
+      return res.status(404).json({ error: 'Queue not found' });
+    }
+    const window = parseWindow(req, res);
+    if (!window) return;
+    const { start, end } = window;
 
     const failed = await jobMonitor.getJobs(queue, 'failed', start, end);
     res.json({ jobs: failed, count: failed.length });
