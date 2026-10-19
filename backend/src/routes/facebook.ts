@@ -4,12 +4,10 @@ import { authenticate as authMiddleware } from '../middleware/authenticate';
 import { checkPermission } from '../middleware/checkPermission';
 import { facebookService, FacebookPostRequest } from '../services/FacebookService';
 import { createLogger } from '../lib/logger';
-import { redis } from '../lib/redis';
+import { saveOAuthState, consumeOAuthState } from '../lib/redis';
 
 const router = Router();
 const logger = createLogger('facebook-routes');
-
-const OAUTH_STATE_TTL = 600;
 
 /**
  * GET /api/facebook/auth
@@ -21,9 +19,10 @@ router.get('/auth', authMiddleware, async (req: Request, res: Response) => {
   }
   const state = crypto.randomBytes(16).toString('hex');
   const userId = (req as any).user?.id;
-  if (userId) {
-    await redis.set(`oauth:state:facebook:${userId}`, state, 'EX', OAUTH_STATE_TTL);
+  if (!userId) {
+    return res.status(500).json({ error: 'Unable to initiate OAuth flow.' });
   }
+  await saveOAuthState('facebook', state, userId);
   return res.redirect(facebookService.getAuthUrl(state));
 });
 
@@ -48,13 +47,9 @@ router.get('/callback', async (req: Request, res: Response) => {
     return res.status(400).json({ error: 'Missing state parameter.' });
   }
 
-  const userId = (req as any).user?.id;
-  if (userId) {
-    const storedState = await redis.get(`oauth:state:facebook:${userId}`);
-    await redis.del(`oauth:state:facebook:${userId}`);
-    if (storedState !== state) {
-      return res.status(400).json({ error: 'Invalid state parameter.' });
-    }
+  const userId = await consumeOAuthState('facebook', state);
+  if (!userId) {
+    return res.status(400).json({ error: 'Invalid state parameter.' });
   }
 
   try {

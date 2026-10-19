@@ -8,12 +8,10 @@ import { tiktokService } from '../services/TikTokService';
 import { enqueueTikTokVideoUpload } from '../jobs/tiktokVideoJob';
 import { dispatchEvent } from '../services/WebhookDispatcher';
 import { createLogger } from '../lib/logger';
-import { redis } from '../lib/redis';
+import { saveOAuthState, consumeOAuthState } from '../lib/redis';
 
 const router = Router();
 const logger = createLogger('tiktok-routes');
-
-const OAUTH_STATE_TTL = 600;
 
 // ─── OAuth ────────────────────────────────────────────────────────────────────
 
@@ -26,11 +24,12 @@ router.get('/auth', authMiddleware, async (req: Request, res: Response) => {
   if (!tiktokService.isConfigured()) {
     return res.status(503).json({ error: 'TikTok API not configured.' });
   }
-  const state = crypto.randomBytes(16).toString('hex');
   const userId = (req as any).user?.id;
-  if (userId) {
-    await redis.set(`oauth:state:tiktok:${userId}`, state, 'EX', OAUTH_STATE_TTL);
+  if (!userId) {
+    return res.status(500).json({ error: 'Unable to initiate TikTok OAuth flow.' });
   }
+  const state = crypto.randomBytes(16).toString('hex');
+  await saveOAuthState('tiktok', state, userId);
   return res.redirect(tiktokService.getAuthUrl(state));
 });
 
@@ -54,13 +53,9 @@ router.get('/callback', async (req: Request, res: Response) => {
     return res.status(400).json({ error: 'Missing state parameter.' });
   }
 
-  const userId = (req as any).user?.id;
-  if (userId) {
-    const storedState = await redis.get(`oauth:state:tiktok:${userId}`);
-    await redis.del(`oauth:state:tiktok:${userId}`);
-    if (storedState !== state) {
-      return res.status(400).json({ error: 'Invalid state parameter.' });
-    }
+  const userId = await consumeOAuthState('tiktok', state);
+  if (!userId) {
+    return res.status(400).json({ error: 'Invalid state parameter.' });
   }
 
   try {
