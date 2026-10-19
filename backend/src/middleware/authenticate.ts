@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
-import jwt from 'jsonwebtoken';
 import { AuthBlacklistService } from '../services/AuthBlacklistService';
-import { config } from '../config/config';
+import { verifyAccessToken, decodeToken } from '../lib/jwt';
+import { userRepository } from '../repositories/userRepository';
 
 export interface AuthRequest extends Request {
   user?: { id: string };
@@ -23,27 +23,42 @@ export async function authenticate(
 
   // Short-circuit: decode without verification to check expiry before touching Redis.
   // This avoids a round-trip to the blacklist store for tokens that are already expired.
-  const decoded = jwt.decode(token) as jwt.JwtPayload | null;
+  const decoded = decodeToken(token);
   if (!decoded || (typeof decoded.exp === 'number' && decoded.exp * 1000 < Date.now())) {
     res.status(401).json({ message: 'Unauthorized' });
     return;
   }
 
-  let payload: jwt.JwtPayload;
+  let payload: ReturnType<typeof verifyAccessToken>;
   try {
-    payload = jwt.verify(token, config.JWT_SECRET) as jwt.JwtPayload;
+    payload = verifyAccessToken(token);
   } catch {
     res.status(401).json({ message: 'Unauthorized' });
     return;
   }
 
   const tokenKey = AuthBlacklistService.keyFromPayload(payload);
-  if (await AuthBlacklistService.isBlacklisted(tokenKey)) {
+  const blacklistResult = await AuthBlacklistService.isBlacklisted(tokenKey);
+  if (blacklistResult === 'unavailable') {
+    // Redis is down and fail-closed policy is enabled: reject rather than fail open.
+    res.status(503).json({ message: 'Service Unavailable' });
+    return;
+  }
+  if (blacklistResult === true) {
     res.status(401).json({ message: 'Unauthorized' });
     return;
   }
 
   const userId = payload.sub as string;
+
+  // Cheap cached existence/active check. userRepository.findById caches under `user:<id>`
+  // and selects `deletedAt`, so this avoids a DB round-trip on the hot path.
+  const user = await userRepository.findById(userId);
+  if (!user || user.deletedAt) {
+    res.status(401).json({ message: 'Unauthorized' });
+    return;
+  }
+
   req.user = { id: userId };
   next();
 }

@@ -2,8 +2,8 @@ import { Server, Socket } from 'socket.io';
 import { Server as HttpServer } from 'http';
 import { createAdapter } from '@socket.io/redis-adapter';
 import Redis from 'ioredis';
-import jwt from 'jsonwebtoken';
 import { createLogger } from '../lib/logger';
+import { verifyAccessToken } from '../lib/jwt';
 import { corsOptions } from '../config/cors';
 import { getRedisConnection } from '../config/runtime';
 import { eventBus, JobProgressEvent } from '../lib/eventBus';
@@ -67,8 +67,7 @@ export class SocketService {
         return next(new Error('Authentication error'));
       }
       try {
-        const secret = config.JWT_SECRET;
-        const decoded = jwt.verify(token, secret);
+        const decoded = verifyAccessToken(token);
         socket.user = decoded;
         next();
       } catch (_err) {
