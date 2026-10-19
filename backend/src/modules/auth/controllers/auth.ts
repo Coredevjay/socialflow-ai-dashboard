@@ -33,24 +33,34 @@ function normaliseEmail(email: string): string {
   return email.trim().toLowerCase();
 }
 
-function hashToken(token: string): string {
+// Refresh tokens are never persisted in plaintext: only a SHA-256 digest of the
+// raw token is stored, so a DB dump cannot be replayed against the API.
+function hashRefreshToken(token: string): string {
   return createHash('sha256').update(token).digest('hex');
 }
+
+// Alias kept for the base branch's naming.
+const hashToken = hashRefreshToken;
 
 function signAccess(userId: string): string {
   return jwt.sign({ sub: userId }, jwtSecret(), { expiresIn: jwtExpiresIn() } as jwt.SignOptions);
 }
 
-function signRefresh(userId: string): string {
-  return jwt.sign({ sub: userId, jti: randomUUID() }, jwtRefreshSecret(), {
+function signRefresh(userId: string, familyId: string): string {
+  return jwt.sign({ sub: userId, jti: randomUUID(), familyId }, jwtRefreshSecret(), {
     expiresIn: jwtRefreshExpiresIn(),
   } as jwt.SignOptions);
 }
 
+function refreshTokenExpiry(payload: jwt.JwtPayload | null): Date {
+  return payload?.exp
+    ? new Date(payload.exp * 1000)
+    : new Date(Date.now() + 7 * 24 * 3600 * 1000);
+}
+
 function refreshExpiryDate(): Date {
-  const decoded = jwt.decode(signRefresh('expiry-probe')) as jwt.JwtPayload | null;
-  const exp = decoded?.exp;
-  return exp ? new Date(exp * 1000) : new Date(Date.now() + 7 * 24 * 3600 * 1000);
+  const decoded = jwt.decode(signRefresh('expiry-probe', randomUUID())) as jwt.JwtPayload | null;
+  return refreshTokenExpiry(decoded);
 }
 
 /**
@@ -60,16 +70,18 @@ function refreshExpiryDate(): Date {
 async function persistRefreshToken(
   userId: string,
   refreshToken: string,
+  familyId: string,
   req: Request,
 ): Promise<void> {
   const payload = jwt.decode(refreshToken) as jwt.JwtPayload | null;
   const jti = (payload?.jti as string) ?? randomUUID();
-  const expiresAt = payload?.exp ? new Date(payload.exp * 1000) : refreshExpiryDate();
+  const expiresAt = refreshTokenExpiry(payload);
 
   await prisma.refreshToken.create({
     data: {
       userId,
-      tokenHash: hashToken(refreshToken),
+      tokenHash: hashRefreshToken(refreshToken),
+      familyId,
       jti,
       createdAt: new Date(),
       expiresAt,
@@ -89,6 +101,10 @@ async function persistRefreshToken(
       where: { id: { in: stale.map((row) => row.id) } },
     });
   }
+}
+
+async function revokeFamily(familyId: string): Promise<void> {
+  await prisma.refreshToken.deleteMany({ where: { familyId } });
 }
 
 export async function register(req: Request, res: Response): Promise<void> {
@@ -116,8 +132,9 @@ export async function register(req: Request, res: Response): Promise<void> {
   }
 
   const accessToken = signAccess(user.id);
-  const refreshToken = signRefresh(user.id);
-  await persistRefreshToken(user.id, refreshToken, req);
+  const familyId = randomUUID();
+  const refreshToken = signRefresh(user.id, familyId);
+  await persistRefreshToken(user.id, refreshToken, familyId, req);
 
   auditLogger.log({
     actorId: user.id,
@@ -157,8 +174,9 @@ export async function login(req: Request, res: Response): Promise<void> {
   const rotationRequired = await PasswordHistoryService.isRotationRequired(user.id);
 
   const accessToken = signAccess(user.id);
-  const refreshToken = signRefresh(user.id);
-  await persistRefreshToken(user.id, refreshToken, req);
+  const familyId = randomUUID();
+  const refreshToken = signRefresh(user.id, familyId);
+  await persistRefreshToken(user.id, refreshToken, familyId, req);
 
   auditLogger.log({
     actorId: user.id,
@@ -181,11 +199,32 @@ export async function refresh(req: Request, res: Response): Promise<void> {
   }
 
   const userId = payload.sub as string;
-  const tokenHash = hashToken(refreshToken);
+  const tokenHash = hashRefreshToken(refreshToken);
 
   const user = await UserStore.findById(userId);
   if (!user || user.deletedAt) {
     res.status(401).json({ message: 'Refresh token revoked' });
+    return;
+  }
+
+  const stored = await prisma.refreshToken.findUnique({ where: { tokenHash } });
+  if (!stored || stored.userId !== user.id) {
+    res.status(401).json({ message: 'Refresh token revoked' });
+    return;
+  }
+
+  // Replay of an already-rotated token: treat as theft, revoke the whole
+  // family so neither the legitimate client nor the attacker can continue.
+  if (stored.rotatedAt) {
+    await revokeFamily(stored.familyId);
+    auditLogger.log({
+      actorId: user.id,
+      action: 'auth:refresh-token-reuse',
+      ip: req.ip,
+      userAgent: req.headers['user-agent'],
+      metadata: { familyId: stored.familyId },
+    });
+    res.status(401).json({ message: 'Refresh token reuse detected; please log in again' });
     return;
   }
 
@@ -194,13 +233,12 @@ export async function refresh(req: Request, res: Response): Promise<void> {
   const ttl = payload.exp ? payload.exp - Math.floor(Date.now() / 1000) : 7 * 24 * 3600;
   await AuthBlacklistService.blacklistToken(tokenKey, ttl);
 
-  // Rotate: conditionally delete the presented row, then insert the new one.
-  const newRefresh = signRefresh(user.id);
+  // Rotate refresh token within the same family: conditionally delete the
+  // presented row, then insert the new one.
+  const newRefresh = signRefresh(user.id, stored.familyId);
   const newPayload = jwt.decode(newRefresh) as jwt.JwtPayload | null;
   const newJti = (newPayload?.jti as string) ?? randomUUID();
-  const newExpiresAt = newPayload?.exp
-    ? new Date(newPayload.exp * 1000)
-    : refreshExpiryDate();
+  const newExpiresAt = refreshTokenExpiry(newPayload);
 
   const rotated = await prisma.$transaction(async (tx) => {
     const deleted = await tx.refreshToken.deleteMany({
@@ -212,7 +250,8 @@ export async function refresh(req: Request, res: Response): Promise<void> {
     await tx.refreshToken.create({
       data: {
         userId,
-        tokenHash: hashToken(newRefresh),
+        tokenHash: hashRefreshToken(newRefresh),
+        familyId: stored.familyId,
         jti: newJti,
         createdAt: new Date(),
         expiresAt: newExpiresAt,
@@ -244,9 +283,13 @@ export async function logout(req: Request, res: Response): Promise<void> {
 
   const user = await UserStore.findById(payload.sub);
   if (user) {
-    await prisma.refreshToken.deleteMany({
-      where: { userId: user.id, tokenHash: hashToken(refreshToken) },
+    // Revoke the whole token family this session belongs to.
+    const stored = await prisma.refreshToken.findUnique({
+      where: { tokenHash: hashRefreshToken(refreshToken) },
     });
+    if (stored && stored.userId === user.id) {
+      await revokeFamily(stored.familyId);
+    }
     auditLogger.log({
       actorId: user.id,
       action: 'auth:logout',

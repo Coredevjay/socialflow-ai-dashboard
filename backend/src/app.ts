@@ -45,6 +45,25 @@ app.use(requestIdMiddleware);
 app.use(sliMiddleware);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Redact bearer credentials that may appear in query strings (e.g. ?token=, ?ticket=)
+// so they are never shipped to log storage. See issue #1750.
+morgan.token('url', (req: Request) => {
+  const rawUrl = req.originalUrl || req.url || '';
+  const queryIndex = rawUrl.indexOf('?');
+  if (queryIndex === -1) {
+    return rawUrl;
+  }
+  const path = rawUrl.slice(0, queryIndex);
+  const params = new URLSearchParams(rawUrl.slice(queryIndex + 1));
+  for (const key of ['token', 'ticket']) {
+    if (params.has(key)) {
+      params.set(key, '[REDACTED]');
+    }
+  }
+  const query = params.toString();
+  return query ? `${path}?${query}` : path;
+});
 app.use(morgan('combined'));
 
 // ── API Docs ──────────────────────────────────────────────────────────────────

@@ -8,6 +8,12 @@ export type UpdateUserInput = Prisma.UserUpdateInput;
 type UserWithoutSensitive = Omit<User, 'passwordHash' | 'refreshTokens'>;
 
 /**
+ * Fields that must never be exposed through cached read paths.
+ * Refresh tokens are stored hashed (#1747) and must not be selected here.
+ */
+const SENSITIVE_USER_FIELDS = ['passwordHash', 'refreshTokens'] as const;
+
+/**
  * UserRepository
  *
  * Encapsulates all database operations for the User model.
@@ -32,21 +38,21 @@ export class UserRepository {
    * Returns null when no matching record exists.
    */
   async findById(id: string): Promise<UserWithoutSensitive | null> {
-    return withCache(`user:${id}`, CacheTTL.USER_PROFILE, () =>
-      this.db.user.findUnique({
-        where: { id },
-        select: {
-          id: true,
-          email: true,
-          role: true,
-          lastPasswordChange: true,
-          createdAt: true,
-          deletedAt: true,
-        },
-      }),
-    );
+    return withCache(`user:${id}`, CacheTTL.USER_PROFILE, async () => {
+      const user = await this.db.user.findUnique({ where: { id } });
+      if (!user) return null;
+      // Strip sensitive fields so they are never cached or returned.
+      const { passwordHash, refreshTokens, ...safe } = user;
+      void passwordHash;
+      void refreshTokens;
+      return safe;
+    });
   }
 
+  /**
+   * Find a user by ID including sensitive fields (password hash, hashed
+   * refresh tokens). Bypasses the cache so sensitive data is never cached.
+   */
   async findByIdWithSensitive(id: string): Promise<User | null> {
     return this.db.user.findUnique({ where: { id } });
   }
@@ -60,6 +66,19 @@ export class UserRepository {
    */
   async findByEmail(email: string): Promise<User | null> {
     return this.db.user.findUnique({ where: { email: email.trim().toLowerCase() } });
+  }
+
+  /**
+   * Find a user by email without sensitive fields.
+   * Returns null when no matching record exists.
+   */
+  async findByEmailSafe(email: string): Promise<UserWithoutSensitive | null> {
+    const user = await this.db.user.findUnique({ where: { email } });
+    if (!user) return null;
+    const { passwordHash, refreshTokens, ...safe } = user;
+    void passwordHash;
+    void refreshTokens;
+    return safe;
   }
 
   /**
@@ -107,3 +126,5 @@ export class UserRepository {
 
 /** Singleton instance for use across the application */
 export const userRepository = new UserRepository();
+
+export { SENSITIVE_USER_FIELDS };
