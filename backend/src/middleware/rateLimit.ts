@@ -1,7 +1,7 @@
 import rateLimit, { Options, RateLimitRequestHandler } from 'express-rate-limit';
 import { Request, Response } from 'express';
-import { getRedisConnection } from '../config/runtime';
 import { createLogger } from '../lib/logger';
+import { redis } from '../lib/redis';
 
 const logger = createLogger('rate-limit');
 
@@ -12,13 +12,44 @@ const logger = createLogger('rate-limit');
 /** Holds the active in-memory store instance so tests can call resetAll(). */
 let activeMemoryStore: { resetAll?: () => void } | undefined;
 
+/**
+ * Attach a single error handler to the shared Redis client so that
+ * connection errors from the rate-limit store do not become unhandled
+ * `error` events on the EventEmitter (which would crash the process).
+ *
+ * The handler is registered at most once — ioredis itself de-duplicates
+ * listener registrations by function reference, but we keep a flag to
+ * make the intent explicit and avoid any listener-count warnings.
+ */
+let _errorHandlerAttached = false;
+
+function attachRedisErrorHandler(): void {
+  if (_errorHandlerAttached) return;
+  redis.on('error', (err: Error) => {
+    logger.error('Rate-limit Redis client error', {
+      error: err.message,
+      code: (err as NodeJS.ErrnoException).code,
+    });
+  });
+  _errorHandlerAttached = true;
+}
+
 async function buildStore() {
   try {
     // rate-limit-redis is a peer-optional dep; gracefully skip if absent
     const { default: RedisStore } = await import('rate-limit-redis');
-    const { default: Redis } = await import('ioredis');
-    const client = new Redis(getRedisConnection());
-    return new RedisStore({ sendCommand: (...args: string[]) => (client as any).call(...args) });
+
+    // Reuse the shared singleton client rather than creating a private one.
+    // This ensures:
+    //  1. Connection errors surface through the named error handler below
+    //     instead of becoming unhandled EventEmitter exceptions.
+    //  2. The client is closed by closeRateLimitStore() during graceful
+    //     shutdown — the caller no longer holds an orphaned reference.
+    attachRedisErrorHandler();
+
+    return new RedisStore({
+      sendCommand: (...args: string[]) => (redis as any).call(...args),
+    });
   } catch (err) {
     // In production, a missing Redis store is a fatal misconfiguration —
     // falling back to in-memory would multiply the effective rate limit by
@@ -163,4 +194,37 @@ export function resetLimiters(): void {
   }
   // Also reset via the limiter's own resetKey if the store reference wasn't
   // captured (e.g. when initRateLimiters hasn't been called yet in a test).
+}
+
+/**
+ * Close the shared Redis client used by the rate-limit store.
+ *
+ * Call this as part of the graceful shutdown sequence, **after** all
+ * in-flight requests have completed.  It is idempotent — repeated calls
+ * are safe and will not throw.
+ *
+ * In development/test the Redis store is skipped (in-memory fallback), so
+ * this function is a no-op in those environments.
+ */
+export async function closeRateLimitStore(): Promise<void> {
+  try {
+    // Only attempt to quit if the client is in a connected state.
+    // ioredis status values: "wait" | "reconnecting" | "connecting" | "connect" | "ready" | "close" | "end"
+    if (redis.status === 'ready' || redis.status === 'connect') {
+      await redis.quit();
+    }
+  } catch (err) {
+    logger.error('Error closing rate-limit Redis client', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+/**
+ * Reset the error-handler attachment flag.
+ * Exported for testing only — do not call in production code.
+ * @internal
+ */
+export function _resetErrorHandlerFlag(): void {
+  _errorHandlerAttached = false;
 }

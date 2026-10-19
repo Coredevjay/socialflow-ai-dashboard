@@ -93,6 +93,9 @@ export class UserRepository {
   async delete(id: string): Promise<User | null> {
     try {
       const user = await this.db.user.delete({ where: { id } });
+      // The soft-delete middleware sets `deletedAt`; invalidate the cached
+      // `user:<id>` entry so the active-user check in `authenticate` sees the
+      // deletion immediately (#1742).
       await invalidateCache(`user:${id}`);
       return user;
     } catch (err) {
