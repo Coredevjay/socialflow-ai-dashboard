@@ -2,6 +2,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import { DataRetentionConfig, getDataRetentionConfig } from '../config/runtime';
 import { createLogger } from '../lib/logger';
+import { prisma } from '../lib/prisma';
 import { AlertPayload, NotificationManager } from '../services/notificationProvider';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -24,6 +25,8 @@ export interface DataPruningSummary {
   deletedFiles: number;
   skippedFiles: number;
   errors: Array<{ filePath: string; reason: string }>;
+  /** Number of expired RefreshToken rows pruned */
+  prunedRefreshTokens: number;
   /** Per-category breakdown */
   byCategory: Record<'logs' | 'analytics', CategoryMetrics>;
 }
@@ -198,7 +201,38 @@ const pruneTarget = async (
   }
 };
 
-const buildSummary = (byCategory: Record<'logs' | 'analytics', CategoryMetrics>): DataPruningSummary => {
+/**
+ * Prune expired RefreshToken rows (expiresAt < now).
+ * Returns the number of rows deleted (0 in dry-run mode).
+ */
+export const pruneExpiredRefreshTokens = async (dryRun: boolean = false): Promise<number> => {
+  const now = new Date();
+
+  try {
+    if (dryRun) {
+      const count = await prisma.refreshToken.count({
+        where: { expiresAt: { lt: now } },
+      });
+      logger.info('[DRY-RUN] Would prune expired refresh tokens', { count });
+      return 0;
+    }
+
+    const result = await prisma.refreshToken.deleteMany({
+      where: { expiresAt: { lt: now } },
+    });
+    return result.count;
+  } catch (error) {
+    logger.error('Failed to prune expired refresh tokens', {
+      reason: error instanceof Error ? error.message : String(error),
+    });
+    return 0;
+  }
+};
+
+const buildSummary = (
+  byCategory: Record<'logs' | 'analytics', CategoryMetrics>,
+  prunedRefreshTokens: number = 0,
+): DataPruningSummary => {
   const categories = Object.values(byCategory);
   return {
     scannedFiles: categories.reduce((s, c) => s + c.scannedFiles, 0),
@@ -207,6 +241,7 @@ const buildSummary = (byCategory: Record<'logs' | 'analytics', CategoryMetrics>)
     deletedFiles: categories.reduce((s, c) => s + c.deletedFiles, 0),
     skippedFiles: categories.reduce((s, c) => s + c.skippedFiles, 0),
     errors: categories.flatMap((c) => c.errors),
+    prunedRefreshTokens,
     byCategory,
   };
 };
@@ -260,6 +295,7 @@ export const runDataPruning = async (
       deletedFiles: 0,
       skippedFiles: 0,
       errors: [],
+      prunedRefreshTokens: 0,
       byCategory: {
         logs: emptyMetrics(),
         analytics: emptyMetrics(),
@@ -303,7 +339,9 @@ export const runDataPruning = async (
     await pruneTarget(target, config, byCategory[target.category], runTimestamp, dryRun);
   }
 
-  const summary = buildSummary(byCategory);
+  const prunedRefreshTokens = await pruneExpiredRefreshTokens(dryRun);
+
+  const summary = buildSummary(byCategory, prunedRefreshTokens);
 
   logger.info(`Data retention pruning completed [${mode}]`, {
     scannedFiles: summary.scannedFiles,
@@ -312,6 +350,7 @@ export const runDataPruning = async (
     deletedFiles: summary.deletedFiles,
     skippedFiles: summary.skippedFiles,
     errorCount: summary.errors.length,
+    prunedRefreshTokens: summary.prunedRefreshTokens,
     dryRun: config.dryRun,
     byCategory: {
       logs: {

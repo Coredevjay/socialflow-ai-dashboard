@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { UserStore } from '../../../models/User';
 import { auditLogger } from '../../../services/AuditLogger';
 import { PasswordHistoryService } from '../../../services/PasswordHistoryService';
@@ -12,10 +12,25 @@ import { config } from '../../../config/config';
 
 const SALT_ROUNDS = 12;
 
+// Maximum number of concurrent refresh-token sessions kept per user.
+const MAX_SESSIONS_PER_USER = 10;
+
+// Fixed cost-12 bcrypt hash used to equalise login timing when the account
+// does not exist, so response time does not reveal account existence.
+const DUMMY_HASH = '$2a$12$C6UzMDM.H6dfI/f/IKcEeO5ZBj3pQ0jJ0h9b7cQ0h1oQ8oQ0h1oQ0';
+
 const jwtSecret = () => config.JWT_SECRET;
 const jwtExpiresIn = () => config.JWT_EXPIRES_IN;
 const jwtRefreshSecret = () => config.JWT_REFRESH_SECRET;
 const jwtRefreshExpiresIn = () => config.JWT_REFRESH_EXPIRES_IN;
+
+function normaliseEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
+
+function hashToken(token: string): string {
+  return createHash('sha256').update(token).digest('hex');
+}
 
 function signAccess(userId: string): string {
   return jwt.sign({ sub: userId }, jwtSecret(), { expiresIn: jwtExpiresIn() } as jwt.SignOptions);
@@ -27,26 +42,77 @@ function signRefresh(userId: string): string {
   } as jwt.SignOptions);
 }
 
-export async function register(req: Request, res: Response): Promise<void> {
-  const { email, password } = req.body as { email: string; password: string };
+function refreshExpiryDate(): Date {
+  const decoded = jwt.decode(signRefresh('expiry-probe')) as jwt.JwtPayload | null;
+  const exp = decoded?.exp;
+  return exp ? new Date(exp * 1000) : new Date(Date.now() + 7 * 24 * 3600 * 1000);
+}
 
-  if (await UserStore.findByEmail(email)) {
-    res.status(409).json({ message: 'Email already registered' });
-    return;
+/**
+ * Persist a refresh token session row and enforce the per-user session cap by
+ * deleting the oldest rows beyond the cap.
+ */
+async function persistRefreshToken(
+  userId: string,
+  refreshToken: string,
+  req: Request,
+): Promise<void> {
+  const payload = jwt.decode(refreshToken) as jwt.JwtPayload | null;
+  const jti = (payload?.jti as string) ?? randomUUID();
+  const expiresAt = payload?.exp ? new Date(payload.exp * 1000) : refreshExpiryDate();
+
+  await prisma.refreshToken.create({
+    data: {
+      userId,
+      tokenHash: hashToken(refreshToken),
+      jti,
+      createdAt: new Date(),
+      expiresAt,
+      userAgent: req.headers['user-agent'] ?? null,
+      ip: req.ip ?? null,
+    },
+  });
+
+  const stale = await prisma.refreshToken.findMany({
+    where: { userId },
+    orderBy: { createdAt: 'desc' },
+    skip: MAX_SESSIONS_PER_USER,
+    select: { id: true },
+  });
+  if (stale.length > 0) {
+    await prisma.refreshToken.deleteMany({
+      where: { id: { in: stale.map((row) => row.id) } },
+    });
   }
+}
+
+export async function register(req: Request, res: Response): Promise<void> {
+  const { email: rawEmail, password } = req.body as { email: string; password: string };
+  const email = normaliseEmail(rawEmail);
 
   const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
-  const user = await UserStore.create({
-    id: randomUUID(),
-    email,
-    passwordHash,
-    createdAt: new Date(),
-    refreshTokens: [],
-  });
+
+  let user;
+  try {
+    user = await UserStore.create({
+      id: randomUUID(),
+      email,
+      passwordHash,
+      createdAt: new Date(),
+      refreshTokens: [],
+    });
+  } catch (err: any) {
+    if (err?.code === 'P2002') {
+      // Rely on the unique constraint rather than a check-then-create race.
+      res.status(409).json({ message: 'Email already registered' });
+      return;
+    }
+    throw err;
+  }
 
   const accessToken = signAccess(user.id);
   const refreshToken = signRefresh(user.id);
-  await UserStore.update(user.id, { refreshTokens: [refreshToken] });
+  await persistRefreshToken(user.id, refreshToken, req);
 
   auditLogger.log({
     actorId: user.id,
@@ -58,7 +124,8 @@ export async function register(req: Request, res: Response): Promise<void> {
 }
 
 export async function login(req: Request, res: Response): Promise<void> {
-  const { email, password } = req.body as { email: string; password: string };
+  const { email: rawEmail, password } = req.body as { email: string; password: string };
+  const email = normaliseEmail(rawEmail);
 
   // Per-account lockout, independent of the caller's IP — the authLimiter
   // middleware only throttles by IP, so a distributed attack against a single
@@ -71,7 +138,10 @@ export async function login(req: Request, res: Response): Promise<void> {
   }
 
   const user = await UserStore.findByEmail(email);
-  if (!user || !(await bcrypt.compare(password, user.passwordHash))) {
+  // Always run a bcrypt comparison, even for unknown accounts, so response
+  // timing does not reveal whether the email exists.
+  const passwordMatches = await bcrypt.compare(password, user ? user.passwordHash : DUMMY_HASH);
+  if (!user || !passwordMatches) {
     await redisAccountLockoutStore.recordFailedAttempt(email);
     res.status(401).json({ message: 'Invalid credentials' });
     return;
@@ -83,7 +153,7 @@ export async function login(req: Request, res: Response): Promise<void> {
 
   const accessToken = signAccess(user.id);
   const refreshToken = signRefresh(user.id);
-  await UserStore.update(user.id, { refreshTokens: [...user.refreshTokens, refreshToken] });
+  await persistRefreshToken(user.id, refreshToken, req);
 
   auditLogger.log({
     actorId: user.id,
@@ -105,8 +175,11 @@ export async function refresh(req: Request, res: Response): Promise<void> {
     return;
   }
 
-  const user = await UserStore.findById(payload.sub as string);
-  if (!user || !user.refreshTokens.includes(refreshToken)) {
+  const userId = payload.sub as string;
+  const tokenHash = hashToken(refreshToken);
+
+  const user = await UserStore.findById(userId);
+  if (!user) {
     res.status(401).json({ message: 'Refresh token revoked' });
     return;
   }
@@ -116,11 +189,39 @@ export async function refresh(req: Request, res: Response): Promise<void> {
   const ttl = payload.exp ? payload.exp - Math.floor(Date.now() / 1000) : 7 * 24 * 3600;
   await AuthBlacklistService.blacklistToken(tokenKey, ttl);
 
-  // Rotate refresh token
+  // Rotate: conditionally delete the presented row, then insert the new one.
   const newRefresh = signRefresh(user.id);
-  await UserStore.update(user.id, {
-    refreshTokens: [...user.refreshTokens.filter((t) => t !== refreshToken), newRefresh],
+  const newPayload = jwt.decode(newRefresh) as jwt.JwtPayload | null;
+  const newJti = (newPayload?.jti as string) ?? randomUUID();
+  const newExpiresAt = newPayload?.exp
+    ? new Date(newPayload.exp * 1000)
+    : refreshExpiryDate();
+
+  const rotated = await prisma.$transaction(async (tx) => {
+    const deleted = await tx.refreshToken.deleteMany({
+      where: { userId, tokenHash },
+    });
+    if (deleted.count === 0) {
+      return false;
+    }
+    await tx.refreshToken.create({
+      data: {
+        userId,
+        tokenHash: hashToken(newRefresh),
+        jti: newJti,
+        createdAt: new Date(),
+        expiresAt: newExpiresAt,
+        userAgent: req.headers['user-agent'] ?? null,
+        ip: req.ip ?? null,
+      },
+    });
+    return true;
   });
+
+  if (!rotated) {
+    res.status(401).json({ message: 'Refresh token revoked' });
+    return;
+  }
 
   res.json({ accessToken: signAccess(user.id), refreshToken: newRefresh });
 }
@@ -138,8 +239,8 @@ export async function logout(req: Request, res: Response): Promise<void> {
 
   const user = await UserStore.findById(payload.sub as string);
   if (user) {
-    await UserStore.update(user.id, {
-      refreshTokens: user.refreshTokens.filter((t) => t !== refreshToken),
+    await prisma.refreshToken.deleteMany({
+      where: { userId: user.id, tokenHash: hashToken(refreshToken) },
     });
     auditLogger.log({
       actorId: user.id,
@@ -203,7 +304,7 @@ export async function changePassword(req: Request, res: Response): Promise<void>
   await PasswordHistoryService.recordPasswordChange(userId, newPasswordHash);
 
   // Invalidate all existing refresh tokens
-  await UserStore.update(userId, { refreshTokens: [] });
+  await prisma.refreshToken.deleteMany({ where: { userId } });
 
   // Blacklist the current access token — forces re-login after password change
   const authHeader = req.headers.authorization;
