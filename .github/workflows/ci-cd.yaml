@@ -5,6 +5,11 @@ on:
     branches: ["main", "develop", "staging", "master"]
   pull_request:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Never cancel an in-flight staging deploy: a half-finished kubectl rollout is worse than a late one.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/staging' }}
+
 permissions:
   contents: read
 
