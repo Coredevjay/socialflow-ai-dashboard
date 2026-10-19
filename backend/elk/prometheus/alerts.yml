@@ -1,4 +1,15 @@
 groups:
+  - name: moderation
+    interval: 30s
+    rules:
+      - alert: ModerationBypassDetected
+        expr: sum by (mode, reason) (increase(moderation_bypass_total[5m])) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "Content moderation was bypassed"
+          description: "Moderation bypassed in {{ $labels.mode }} mode: {{ $labels.reason }}."
+
   - name: sli_response_time
     interval: 30s
     rules:

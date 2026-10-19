@@ -1,8 +1,11 @@
 import { createLogger } from '../lib/logger';
 import { DynamicConfigService, ConfigKey } from './DynamicConfigService';
 import { auditLogger } from './AuditLogger';
+import { moderationBypassTotal } from '../lib/metrics';
+import { createNotificationManager } from './notificationProvider';
 
 const logger = createLogger('moderation-service');
+const notificationManager = createNotificationManager();
 
 export type SensitivityLevel = 'low' | 'medium' | 'high';
 
@@ -122,6 +125,10 @@ const BYPASS_RESULT: ModerationResult = { flagged: false, blocked: false, catego
  */
 function emitModerationAlert(alert: ModerationAlert): void {
   const alertMsg = `[MODERATION-ALERT] type=${alert.type} mode=${alert.mode} severity=${alert.severity}`;
+
+  if (alert.type === 'MODERATION_BYPASSED') {
+    moderationBypassTotal.inc({ mode: alert.mode, reason: alert.reason });
+  }
   
   switch (alert.severity) {
     case 'critical':
@@ -131,7 +138,23 @@ function emitModerationAlert(alert: ModerationAlert): void {
         timestamp: alert.timestamp,
         context: alert.context,
       });
-      // TODO: Emit to error tracking system (Sentry, etc.)
+      void notificationManager.sendAlert({
+        severity: 'critical',
+        service: 'content-moderation',
+        message: alertMsg,
+        details: {
+          reason: alert.reason,
+          mode: alert.mode,
+          type: alert.type,
+          ...(alert.context ?? {}),
+        },
+        timestamp: alert.timestamp.toISOString(),
+      }).catch((error: unknown) => {
+        logger.error('Failed to send moderation alert notification', {
+          error: error instanceof Error ? error.message : String(error),
+          reason: alert.reason,
+        });
+      });
       break;
     case 'error':
       logger.error(alertMsg, { reason: alert.reason, context: alert.context });
@@ -140,9 +163,6 @@ function emitModerationAlert(alert: ModerationAlert): void {
       logger.warn(alertMsg, { reason: alert.reason, context: alert.context });
       break;
   }
-  
-  // TODO: Emit structured event to monitoring system (CloudWatch, DataDog, etc.)
-  // Example: metrics.emit('moderation_alert', { type: alert.type, mode: alert.mode });
 }
 
 export const ModerationService = {

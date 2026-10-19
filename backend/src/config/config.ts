@@ -10,6 +10,7 @@ const envSchema = z
     // ── Server ────────────────────────────────────────────────────────────────
     NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
     BACKEND_PORT: z.coerce.number().int().positive().default(3001),
+    CORS_ALLOWED_ORIGINS: z.string().optional(),
 
     // ── Database ──────────────────────────────────────────────────────────────
     // DATABASE_URL can be provided directly (local/test) or assembled at
