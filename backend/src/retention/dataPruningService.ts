@@ -63,6 +63,12 @@ const ensureDirectory = async (directoryPath: string): Promise<void> => {
   await fs.mkdir(directoryPath, { recursive: true });
 };
 
+const isExdevError = (error: unknown): boolean => {
+  if (!error || typeof error !== 'object') return false;
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === 'EXDEV';
+};
+
 const archiveFile = async (
   sourceFilePath: string,
   destinationRoot: string,
@@ -70,8 +76,42 @@ const archiveFile = async (
 ): Promise<void> => {
   const destinationPath = path.join(destinationRoot, relativePath);
   await ensureDirectory(path.dirname(destinationPath));
-  await fs.rename(sourceFilePath, destinationPath);
+
+  try {
+    await fs.rename(sourceFilePath, destinationPath);
+    return;
+  } catch (error) {
+    if (!isExdevError(error)) {
+      throw error;
+    }
+  }
+
+  // Cross-device rename is not supported (EXDEV); fall back to copy + unlink.
+  let mode: number | undefined;
+  try {
+    const stats = await fs.stat(sourceFilePath);
+    mode = stats.mode;
+  } catch {
+    // Mode preservation is best-effort; continue with the copy.
+  }
+
+  await fs.copyFile(sourceFilePath, destinationPath);
+
+  if (mode !== undefined) {
+    try {
+      await fs.chmod(destinationPath, mode);
+    } catch {
+      // Ignore chmod failures (e.g. unsupported filesystem).
+    }
+  }
+
+  await fs.unlink(sourceFilePath);
 };
+
+/** Build a filesystem-safe timestamp used to namespace each archive run. */
+const buildRunTimestamp = (now: Date = new Date()): string =>
+  now.toISOString().replace(/[:.]/g, '-');
+=======
 
 const emptyMetrics = (): CategoryMetrics => ({
   scannedFiles: 0,
@@ -87,6 +127,7 @@ const pruneTarget = async (
   target: PruningTarget,
   config: DataRetentionConfig,
   metrics: CategoryMetrics,
+  runTimestamp: string,
   dryRun: boolean = false,
 ): Promise<void> => {
   const absoluteBasePath = toAbsolutePath(target.basePath);
@@ -133,7 +174,11 @@ const pruneTarget = async (
           metrics.deletedFiles += 1;
         }
       } else if (config.mode === 'archive') {
-        const archiveRoot = path.join(toAbsolutePath(config.archiveDirectory), target.category);
+        const archiveRoot = path.join(
+          toAbsolutePath(config.archiveDirectory),
+          target.category,
+          runTimestamp,
+        );
         await archiveFile(filePath, archiveRoot, path.relative(absoluteBasePath, filePath));
         metrics.archivedFiles += 1;
       } else if (config.dryRun) {
@@ -252,8 +297,10 @@ export const runDataPruning = async (
     })),
   ];
 
+  const runTimestamp = buildRunTimestamp();
+
   for (const target of targets) {
-    await pruneTarget(target, config, byCategory[target.category], dryRun);
+    await pruneTarget(target, config, byCategory[target.category], runTimestamp, dryRun);
   }
 
   const summary = buildSummary(byCategory);

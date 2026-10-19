@@ -3,6 +3,7 @@ import { DynamicConfigService, ConfigKey } from './DynamicConfigService';
 import { auditLogger } from './AuditLogger';
 import { moderationBypassTotal } from '../lib/metrics';
 import { createNotificationManager } from './notificationProvider';
+import { config } from '../config';
 
 const logger = createLogger('moderation-service');
 const notificationManager = createNotificationManager();
@@ -55,7 +56,7 @@ const ALWAYS_BLOCK_BASELINE = new Set([
   'self-harm/instructions',
 ]);
 
-const extraCategories = (process.env.MODERATION_ALWAYS_BLOCK_EXTRA ?? '')
+const extraCategories = (config.MODERATION_ALWAYS_BLOCK_EXTRA ?? '')
   .split(',')
   .map((c) => c.trim())
   .filter(Boolean);
@@ -69,7 +70,7 @@ function getSensitivity(tenantId?: string): SensitivityLevel {
   const tenantVal = tenantId && svc
     ? svc.get<string>(`tenant:${tenantId}:${ConfigKey.MODERATION_SENSITIVITY}`)
     : null;
-  const val = (tenantVal ?? process.env.MODERATION_SENSITIVITY ?? 'medium').toLowerCase();
+  const val = (tenantVal ?? config.MODERATION_SENSITIVITY ?? 'medium').toLowerCase();
   if (val === 'low' || val === 'high') return val;
   return 'medium';
 }
@@ -90,7 +91,7 @@ function getSensitivity(tenantId?: string): SensitivityLevel {
 let failOpenAuditEmitted = false;
 
 function getMode(): 'fail-open' | 'fail-closed' {
-  if (process.env.MODERATION_MODE === 'fail-open') {
+  if (config.MODERATION_MODE === 'fail-open') {
     if (!failOpenAuditEmitted) {
       failOpenAuditEmitted = true;
       auditLogger
@@ -99,7 +100,7 @@ function getMode(): 'fail-open' | 'fail-closed' {
           action: 'moderation:config:fail-open',
           resourceType: 'moderation-config',
           metadata: {
-            environment: process.env.NODE_ENV,
+            environment: config.NODE_ENV,
             mode: 'fail-open',
           },
         })
@@ -167,7 +168,7 @@ function emitModerationAlert(alert: ModerationAlert): void {
 
 export const ModerationService = {
   isConfigured(): boolean {
-    return !!process.env.OPENAI_API_KEY;
+    return !!config.OPENAI_API_KEY;
   },
 
   /**
@@ -236,7 +237,7 @@ export const ModerationService = {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        Authorization: `Bearer ${config.OPENAI_API_KEY}`,
       },
       body: JSON.stringify({ input: text }),
       signal: AbortSignal.timeout(10_000),

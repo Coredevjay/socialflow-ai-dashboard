@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto';
 import { prisma } from '../lib/prisma';
 import { createLogger } from '../lib/logger';
 import { ValidationError } from '../lib/errors';
+import { config } from '../config/config';
 import {
   Subscription,
   PLAN_CREDITS,
@@ -15,7 +16,7 @@ const logger = createLogger('billing-service');
 
 
 function stripe(): Stripe {
-  return new Stripe(process.env.STRIPE_SECRET_KEY!, { apiVersion: '2026-02-25.clover' });
+  return new Stripe(config.STRIPE_SECRET_KEY!, { apiVersion: '2026-02-25.clover' });
 }
 
 function toSubscription(row: {
@@ -48,7 +49,7 @@ function toSubscription(row: {
 
 export class BillingService {
   public isConfigured(): boolean {
-    return !!process.env.STRIPE_SECRET_KEY;
+    return !!config.STRIPE_SECRET_KEY;
   }
 
   /** Create or retrieve a Stripe customer and provision a free subscription */
@@ -256,8 +257,9 @@ export class BillingService {
 
   /** Handle incoming Stripe webhook events */
   public async handleWebhook(rawBody: Buffer, signature: string): Promise<void> {
-    const secret = process.env.STRIPE_WEBHOOK_SECRET;
-    if (!secret) throw new Error('STRIPE_WEBHOOK_SECRET is not set');
+    // The config schema guarantees STRIPE_WEBHOOK_SECRET is present whenever
+    // billing is enabled (see superRefine in config.ts).
+    const secret = config.STRIPE_WEBHOOK_SECRET!;
 
     let event: Stripe.Event;
     try {

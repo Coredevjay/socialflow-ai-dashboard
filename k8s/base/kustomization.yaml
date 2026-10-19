@@ -16,3 +16,4 @@ resources:
   - pdb.yaml
   - worker-pdb.yaml
   - networkpolicy.yaml
+  - data-pruning-cronjob.yaml
