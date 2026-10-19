@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { UserStore } from '../../../models/User';
 import { auditLogger } from '../../../services/AuditLogger';
 import { PasswordHistoryService } from '../../../services/PasswordHistoryService';
@@ -21,10 +21,42 @@ function signAccess(userId: string): string {
   return jwt.sign({ sub: userId }, jwtSecret(), { expiresIn: jwtExpiresIn() } as jwt.SignOptions);
 }
 
-function signRefresh(userId: string): string {
-  return jwt.sign({ sub: userId, jti: randomUUID() }, jwtRefreshSecret(), {
+function signRefresh(userId: string, familyId: string): string {
+  return jwt.sign({ sub: userId, jti: randomUUID(), familyId }, jwtRefreshSecret(), {
     expiresIn: jwtRefreshExpiresIn(),
   } as jwt.SignOptions);
+}
+
+// Refresh tokens are never persisted in plaintext: only a SHA-256 digest of the
+// raw token is stored, so a DB dump cannot be replayed against the API.
+function hashRefreshToken(token: string): string {
+  return createHash('sha256').update(token).digest('hex');
+}
+
+function refreshTokenExpiry(payload: jwt.JwtPayload): Date {
+  return payload.exp
+    ? new Date(payload.exp * 1000)
+    : new Date(Date.now() + 7 * 24 * 3600 * 1000);
+}
+
+async function persistRefreshToken(
+  userId: string,
+  token: string,
+  familyId: string,
+  payload: jwt.JwtPayload,
+): Promise<void> {
+  await prisma.refreshToken.create({
+    data: {
+      userId,
+      tokenHash: hashRefreshToken(token),
+      familyId,
+      expiresAt: refreshTokenExpiry(payload),
+    },
+  });
+}
+
+async function revokeFamily(familyId: string): Promise<void> {
+  await prisma.refreshToken.deleteMany({ where: { familyId } });
 }
 
 export async function register(req: Request, res: Response): Promise<void> {
@@ -45,8 +77,14 @@ export async function register(req: Request, res: Response): Promise<void> {
   });
 
   const accessToken = signAccess(user.id);
-  const refreshToken = signRefresh(user.id);
-  await UserStore.update(user.id, { refreshTokens: [refreshToken] });
+  const familyId = randomUUID();
+  const refreshToken = signRefresh(user.id, familyId);
+  await persistRefreshToken(
+    user.id,
+    refreshToken,
+    familyId,
+    jwt.decode(refreshToken) as jwt.JwtPayload,
+  );
 
   auditLogger.log({
     actorId: user.id,
@@ -82,8 +120,14 @@ export async function login(req: Request, res: Response): Promise<void> {
   const rotationRequired = await PasswordHistoryService.isRotationRequired(user.id);
 
   const accessToken = signAccess(user.id);
-  const refreshToken = signRefresh(user.id);
-  await UserStore.update(user.id, { refreshTokens: [...user.refreshTokens, refreshToken] });
+  const familyId = randomUUID();
+  const refreshToken = signRefresh(user.id, familyId);
+  await persistRefreshToken(
+    user.id,
+    refreshToken,
+    familyId,
+    jwt.decode(refreshToken) as jwt.JwtPayload,
+  );
 
   auditLogger.log({
     actorId: user.id,
@@ -106,8 +150,30 @@ export async function refresh(req: Request, res: Response): Promise<void> {
   }
 
   const user = await UserStore.findById(payload.sub as string);
-  if (!user || !user.refreshTokens.includes(refreshToken)) {
+  if (!user) {
     res.status(401).json({ message: 'Refresh token revoked' });
+    return;
+  }
+
+  const tokenHash = hashRefreshToken(refreshToken);
+  const stored = await prisma.refreshToken.findUnique({ where: { tokenHash } });
+  if (!stored || stored.userId !== user.id) {
+    res.status(401).json({ message: 'Refresh token revoked' });
+    return;
+  }
+
+  // Replay of an already-rotated token: treat as theft, revoke the whole
+  // family so neither the legitimate client nor the attacker can continue.
+  if (stored.rotatedAt) {
+    await revokeFamily(stored.familyId);
+    auditLogger.log({
+      actorId: user.id,
+      action: 'auth:refresh-token-reuse',
+      ip: req.ip,
+      userAgent: req.headers['user-agent'],
+      metadata: { familyId: stored.familyId },
+    });
+    res.status(401).json({ message: 'Refresh token reuse detected; please log in again' });
     return;
   }
 
@@ -116,11 +182,22 @@ export async function refresh(req: Request, res: Response): Promise<void> {
   const ttl = payload.exp ? payload.exp - Math.floor(Date.now() / 1000) : 7 * 24 * 3600;
   await AuthBlacklistService.blacklistToken(tokenKey, ttl);
 
-  // Rotate refresh token
-  const newRefresh = signRefresh(user.id);
-  await UserStore.update(user.id, {
-    refreshTokens: [...user.refreshTokens.filter((t) => t !== refreshToken), newRefresh],
-  });
+  // Rotate refresh token within the same family
+  const newRefresh = signRefresh(user.id, stored.familyId);
+  await prisma.$transaction([
+    prisma.refreshToken.update({
+      where: { tokenHash },
+      data: { rotatedAt: new Date() },
+    }),
+    prisma.refreshToken.create({
+      data: {
+        userId: user.id,
+        tokenHash: hashRefreshToken(newRefresh),
+        familyId: stored.familyId,
+        expiresAt: refreshTokenExpiry(jwt.decode(newRefresh) as jwt.JwtPayload),
+      },
+    }),
+  ]);
 
   res.json({ accessToken: signAccess(user.id), refreshToken: newRefresh });
 }
@@ -138,9 +215,13 @@ export async function logout(req: Request, res: Response): Promise<void> {
 
   const user = await UserStore.findById(payload.sub as string);
   if (user) {
-    await UserStore.update(user.id, {
-      refreshTokens: user.refreshTokens.filter((t) => t !== refreshToken),
+    // Revoke the whole token family this session belongs to.
+    const stored = await prisma.refreshToken.findUnique({
+      where: { tokenHash: hashRefreshToken(refreshToken) },
     });
+    if (stored && stored.userId === user.id) {
+      await revokeFamily(stored.familyId);
+    }
     auditLogger.log({
       actorId: user.id,
       action: 'auth:logout',
@@ -203,7 +284,7 @@ export async function changePassword(req: Request, res: Response): Promise<void>
   await PasswordHistoryService.recordPasswordChange(userId, newPasswordHash);
 
   // Invalidate all existing refresh tokens
-  await UserStore.update(userId, { refreshTokens: [] });
+  await prisma.refreshToken.deleteMany({ where: { userId } });
 
   // Blacklist the current access token — forces re-login after password change
   const authHeader = req.headers.authorization;

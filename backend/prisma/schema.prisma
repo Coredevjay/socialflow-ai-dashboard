@@ -12,10 +12,13 @@ model User {
   email               String               @unique
   passwordHash        String
   lastPasswordChange  DateTime             @default(now())
+  /// @deprecated Legacy plaintext refresh tokens. No longer written; kept
+  /// temporarily for migration. Use the RefreshToken model instead.
   refreshTokens       String[]
   role                String               @default("user")
   listings            Listing[]            @relation("MentorListings")
   passwordHistory     PasswordHistory[]
+  refreshTokensV2     RefreshToken[]
   createdAt           DateTime             @default(now())
   deletedAt           DateTime?
   memberships         OrganizationMember[]
@@ -24,6 +27,28 @@ model User {
   @@index([email])
   @@index([createdAt])
   @@index([deletedAt])
+}
+
+/// Hashed refresh-token session. Only a SHA-256 hash of the token (or its
+/// jti) is persisted, never the raw JWT. Tokens are grouped into families so
+/// that replay of an already-rotated token can revoke the whole family.
+model RefreshToken {
+  id          String    @id @default(uuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash   String    @unique
+  familyId    String
+  expiresAt   DateTime
+  consumedAt  DateTime?
+  rotatedAt   DateTime?
+  revokedAt   DateTime?
+  replacedBy  String?
+  createdAt   DateTime  @default(now())
+
+  @@index([tokenHash])
+  @@index([familyId])
+  @@index([userId])
+  @@index([expiresAt])
 }
 
 model PasswordHistory {

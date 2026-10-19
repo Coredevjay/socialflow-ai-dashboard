@@ -18,19 +18,14 @@ const logger = createLogger('SSE');
  *     description: |
  *       Streams `job_progress` events for the authenticated user.
  *       Authentication: Pass an SSE ticket as `?ticket=<ticket>` (preferred)
- *       or pass the JWT as `?token=<jwt>` (legacy, discouraged).
- *       Browser `EventSource` cannot set headers, so query params are required.
+ *       or send the JWT in the `Authorization: Bearer <jwt>` header.
+ *       The JWT is never accepted as a query parameter.
  *     parameters:
  *       - in: query
  *         name: ticket
  *         schema:
  *           type: string
  *         description: Short-lived SSE ticket (preferred, from POST /auth/sse-ticket)
- *       - in: query
- *         name: token
- *         schema:
- *           type: string
- *         description: JWT access token (legacy fallback, not recommended)
  *     responses:
  *       200:
  *         description: SSE stream (text/event-stream)
@@ -53,10 +48,10 @@ router.get('/stream', (req: AuthRequest, res: Response) => {
       return;
     }
   } else {
-    // Fallback: Accept token from header or query param (legacy)
+    // Fallback: Accept token from the Authorization header only.
+    // Query-string tokens are rejected to avoid leaking JWTs via URLs/logs.
     const authHeader = req.headers.authorization;
-    const queryToken = req.query.token as string | undefined;
-    const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : queryToken;
+    const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : undefined;
 
     if (!token) {
       res.status(401).json({ message: 'Missing ticket or token' });
