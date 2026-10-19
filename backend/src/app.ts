@@ -19,6 +19,7 @@ import { buildContext } from './graphql/context';
 import { authenticate } from './middleware/authenticate';
 import { config } from './config/config';
 import { registerModules } from './modules';
+import { corsOptions } from './config/cors';
 
 // Initialise rate limiters (resolves Redis store in production)
 export const rateLimitersReady = initRateLimiters();
@@ -33,21 +34,10 @@ app.use(helmet());
 // Response compression (Gzip/Brotli) — before body parsing so all responses are eligible
 app.use(compressionMiddleware);
 
-// CORS — restrict to known frontend origins
-const ALLOWED_ORIGINS = (process.env.CORS_ALLOWED_ORIGINS ?? '')
-  .split(',')
-  .map((o) => o.trim())
-  .filter(Boolean);
-
+// CORS — restrict to the configured frontend origin allow-list
 app.use(
   cors({
-    origin: (origin, callback) => {
-      if (!origin || ALLOWED_ORIGINS.includes(origin)) {
-        callback(null, true);
-      } else {
-        callback(new Error(`CORS: origin ${origin} not allowed`));
-      }
-    },
+    origin: corsOptions.origin,
     credentials: true,
   }),
 );
@@ -118,13 +108,7 @@ export const apolloReady = apolloServer.start().then(() => {
   app.use(
     '/graphql',
     cors<cors.CorsRequest>({
-      origin: (origin, callback) => {
-        if (!origin || ALLOWED_ORIGINS.includes(origin)) {
-          callback(null, true);
-        } else {
-          callback(new Error(`CORS: origin ${origin} not allowed`));
-        }
-      },
+      origin: corsOptions.origin,
       credentials: true,
     }),
     express.json(),

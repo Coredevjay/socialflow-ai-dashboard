@@ -1,4 +1,6 @@
 import { CorsOptions } from 'cors';
+import { ForbiddenError } from '../lib/errors';
+import { config } from './config';
 
 /**
  * Allowed origins per environment.
@@ -20,7 +22,7 @@ const ALLOWED_ORIGINS: Record<string, string[]> = {
 // previously this used 'local'/'staging'/'prod' keys that never matched the
 // actual NODE_ENV of 'development'/'test'/'production', so production
 // silently fell back to the localhost allowlist.
-const env = process.env.NODE_ENV ?? 'development';
+const env = config.NODE_ENV;
 
 /**
  * Flattened list of origins allowed for the current environment. Exported so
@@ -28,14 +30,17 @@ const env = process.env.NODE_ENV ?? 'development';
  * (e.g. Stripe Checkout success/cancel URLs) can reuse the same allow-list
  * instead of accepting arbitrary attacker-supplied domains.
  */
-export const allowedOrigins: string[] = ALLOWED_ORIGINS[env] ?? ALLOWED_ORIGINS.development;
+const configuredOrigins = config.CORS_ALLOWED_ORIGINS;
+export const allowedOrigins: string[] = configuredOrigins !== undefined
+  ? configuredOrigins.split(',').map((origin) => origin.trim()).filter(Boolean)
+  : ALLOWED_ORIGINS[env] ?? ALLOWED_ORIGINS.development;
 
 export const corsOptions: CorsOptions = {
   origin: (origin, callback) => {
     // Allow server-to-server requests (no Origin header) only outside production
     if (!origin && env !== 'production') return callback(null, true);
     if (origin && allowedOrigins.includes(origin)) return callback(null, true);
-    callback(new Error(`CORS: origin '${origin}' not allowed`));
+    callback(new ForbiddenError('Origin not allowed by CORS policy', 'CORS_ORIGIN_FORBIDDEN'));
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
