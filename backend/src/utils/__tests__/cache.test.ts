@@ -67,6 +67,9 @@ jest.mock('../../config/runtime', () => ({
   getRedisConnection: () => ({ host: '127.0.0.1', port: 6379 }),
 }));
 
+const mockLogger = { warn: jest.fn(), info: jest.fn(), error: jest.fn(), debug: jest.fn() };
+jest.mock('../../lib/logger', () => ({ createLogger: () => mockLogger }));
+
 // ── Import SUT after mocks ────────────────────────────────────────────────────
 
 import { withCache, invalidateCache, invalidateCachePattern, SENTINEL, inflight } from '../cache';
@@ -79,6 +82,7 @@ beforeEach(() => {
   jest.clearAllMocks();
   // Clear the in-process single-flight map so tests start with a clean slate.
   inflight.clear();
+  mockLogger.warn.mockClear();
 
   mockRedis.get.mockImplementation(async (key: string) => store.get(key) ?? null);
   mockRedis.set.mockImplementation(async (key: string, value: string) => {
@@ -532,5 +536,83 @@ describe('withCache() – stampede protection (single-flight)', () => {
     await withCache('seq:key', 60, fetcher);
 
     expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ── withCache – corrupted-entry recovery (#1810) ──────────────────────────────
+
+describe('withCache() – corrupted-entry recovery', () => {
+  it('does not throw when a cached value is not valid JSON', async () => {
+    store.set('cache:bad', 'not-valid-json{{{');
+    const fetcher = jest.fn().mockResolvedValue({ id: 1 });
+    await expect(withCache('bad', 60, fetcher)).resolves.not.toThrow();
+  });
+
+  it('treats a corrupted entry as a cache miss and calls fetcher', async () => {
+    store.set('cache:corrupt', 'not-valid-json{{{');
+    const fetcher = jest.fn().mockResolvedValue({ id: 2 });
+    const result = await withCache('corrupt', 60, fetcher);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ id: 2 });
+  });
+
+  it('deletes the corrupted key from Redis', async () => {
+    store.set('cache:stale', '{broken');
+    const fetcher = jest.fn().mockResolvedValue('fresh');
+    await withCache('stale', 60, fetcher);
+    // Allow the fire-and-forget unlink to complete
+    await Promise.resolve();
+    expect(mockRedis.unlink).toHaveBeenCalledWith('cache:stale');
+  });
+
+  it('logs a warning when a corrupted entry is encountered', async () => {
+    store.set('cache:warn-key', 'definitely not json');
+    const fetcher = jest.fn().mockResolvedValue(null);
+    await withCache('warn-key', 60, fetcher);
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('Cache entry could not be parsed'),
+      expect.objectContaining({ cacheKey: 'cache:warn-key' }),
+    );
+  });
+
+  it('returns fresh fetcher value after recovering from a corrupted entry', async () => {
+    store.set('cache:recover', '}{invalid');
+    const fetcher = jest.fn().mockResolvedValue({ name: 'Alice' });
+    const result = await withCache('recover', 60, fetcher);
+    expect(result).toEqual({ name: 'Alice' });
+  });
+
+  it('caches the fresh value after recovering, so the next call is a hit', async () => {
+    store.set('cache:recache', '}{invalid');
+    const fetcher = jest.fn().mockResolvedValue({ ok: true });
+    await withCache('recache', 60, fetcher);
+    // flush fire-and-forget set
+    await Promise.resolve();
+
+    // Now the store should have the fresh JSON value
+    const second = await withCache('recache', 60, fetcher);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(second).toEqual({ ok: true });
+  });
+
+  it('does not treat a valid JSON null as corrupted (sentinel path)', async () => {
+    // JSON.stringify(SENTINEL) is '"__NULL__"' — a valid JSON string.
+    // This must never be mistaken for a corrupted entry.
+    store.set('cache:sentinel-check', JSON.stringify(SENTINEL));
+    const fetcher = jest.fn();
+    const result = await withCache('sentinel-check', 60, fetcher);
+    expect(result).toBeNull();
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(mockLogger.warn).not.toHaveBeenCalled();
+  });
+
+  it('does not affect normal (valid JSON) cache hits', async () => {
+    store.set('cache:normal', JSON.stringify({ x: 42 }));
+    const fetcher = jest.fn();
+    const result = await withCache('normal', 60, fetcher);
+    expect(result).toEqual({ x: 42 });
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(mockLogger.warn).not.toHaveBeenCalled();
+    expect(mockRedis.unlink).not.toHaveBeenCalledWith('cache:normal');
   });
 });
