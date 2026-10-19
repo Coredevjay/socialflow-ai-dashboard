@@ -12,10 +12,10 @@ model User {
   email               String               @unique
   passwordHash        String
   lastPasswordChange  DateTime             @default(now())
-  refreshTokens       String[]
   role                String               @default("user")
   listings            Listing[]            @relation("MentorListings")
   passwordHistory     PasswordHistory[]
+  refreshTokens       RefreshToken[]
   createdAt           DateTime             @default(now())
   deletedAt           DateTime?
   memberships         OrganizationMember[]
@@ -24,6 +24,26 @@ model User {
   @@index([email])
   @@index([createdAt])
   @@index([deletedAt])
+}
+
+/// One row per active refresh session. Replaces the old
+/// `User.refreshTokens String[]` column so that concurrent logins/refreshes
+/// no longer clobber each other and sessions can be capped and pruned.
+model RefreshToken {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String   @unique
+  jti       String
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+  userAgent String?
+  ip        String?
+
+  @@index([userId])
+  @@index([tokenHash])
+  @@index([expiresAt])
+  @@index([userId, createdAt])
 }
 
 model PasswordHistory {
