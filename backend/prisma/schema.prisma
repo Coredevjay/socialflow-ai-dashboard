@@ -12,13 +12,10 @@ model User {
   email               String               @unique
   passwordHash        String
   lastPasswordChange  DateTime             @default(now())
-  /// @deprecated Legacy plaintext refresh tokens. No longer written; kept
-  /// temporarily for migration. Use the RefreshToken model instead.
-  refreshTokens       String[]
   role                String               @default("user")
   listings            Listing[]            @relation("MentorListings")
   passwordHistory     PasswordHistory[]
-  refreshTokensV2     RefreshToken[]
+  refreshTokens       RefreshToken[]
   createdAt           DateTime             @default(now())
   deletedAt           DateTime?
   memberships         OrganizationMember[]
@@ -29,26 +26,33 @@ model User {
   @@index([deletedAt])
 }
 
-/// Hashed refresh-token session. Only a SHA-256 hash of the token (or its
-/// jti) is persisted, never the raw JWT. Tokens are grouped into families so
-/// that replay of an already-rotated token can revoke the whole family.
+/// One row per active refresh session. Replaces the old
+/// `User.refreshTokens String[]` column so that concurrent logins/refreshes
+/// no longer clobber each other and sessions can be capped and pruned.
+/// Only a SHA-256 hash of the token (or its jti) is persisted, never the raw
+/// JWT. Tokens are grouped into families so that replay of an already-rotated
+/// token can revoke the whole family.
 model RefreshToken {
   id          String    @id @default(uuid())
   userId      String
   user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   tokenHash   String    @unique
+  jti         String
   familyId    String
   expiresAt   DateTime
   consumedAt  DateTime?
   rotatedAt   DateTime?
   revokedAt   DateTime?
   replacedBy  String?
+  userAgent   String?
+  ip          String?
   createdAt   DateTime  @default(now())
 
-  @@index([tokenHash])
-  @@index([familyId])
   @@index([userId])
+  @@index([tokenHash])
   @@index([expiresAt])
+  @@index([userId, createdAt])
+  @@index([familyId])
 }
 
 model PasswordHistory {
@@ -303,6 +307,4 @@ model Subscription {
   creditsRemaining       Int
   creditsMonthly         Int
   currentPeriodEnd       DateTime?
-  createdAt    
-
-/* … truncated 584 chars — edit only what you need near the top … */
+  createdAt

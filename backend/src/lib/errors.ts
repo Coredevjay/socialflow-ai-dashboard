@@ -186,3 +186,16 @@ export const isOperationalError = (error: unknown): boolean => {
   }
   return false;
 };
+
+/**
+ * Type guard to check if error is a Prisma unique constraint violation (P2002)
+ * Useful for translating duplicate-key errors into 409 Conflict responses.
+ */
+export const isUniqueConstraintError = (error: unknown): boolean => {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    (error as { code?: unknown }).code === 'P2002'
+  );
+};

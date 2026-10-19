@@ -22,7 +22,7 @@ import { z } from 'zod';
 export const MAX_PASSWORD_LENGTH = 128;
 
 export const credentialsSchema = z.object({
-  email: z.string().email(),
+  email: z.string().trim().toLowerCase().email(),
   password: z.string().min(8).max(MAX_PASSWORD_LENGTH),
 });
 

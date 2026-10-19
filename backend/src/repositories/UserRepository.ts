@@ -60,9 +60,12 @@ export class UserRepository {
   /**
    * Find a user by their email address.
    * Returns null when no matching record exists.
+   *
+   * Emails are stored normalised (trimmed and lower-cased), so the lookup
+   * value is normalised the same way to keep lookups case-insensitive.
    */
   async findByEmail(email: string): Promise<User | null> {
-    return this.db.user.findUnique({ where: { email } });
+    return this.db.user.findUnique({ where: { email: email.trim().toLowerCase() } });
   }
 
   /**
