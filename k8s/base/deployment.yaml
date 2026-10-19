@@ -69,6 +69,15 @@ spec:
                 name: socialflow-config
             - secretRef:
                 name: socialflow-secrets
+          env:
+            # Data pruning must NOT run in-process: the repeatable BullMQ job
+            # would prune paths on whichever pod's ephemeral container
+            # filesystem happened to pick it up, leaving files on other
+            # replicas unpruned. Pruning runs instead via the dedicated
+            # Kubernetes CronJob (k8s/base/data-pruning-cronjob.yaml), which
+            # mounts the shared volume and prunes it once per schedule.
+            - name: DATA_PRUNING_IN_PROCESS_ENABLED
+              value: "false"
           lifecycle:
             preStop:
               exec:

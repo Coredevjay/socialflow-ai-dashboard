@@ -14,11 +14,27 @@ const DATA_PRUNING_REPEAT_JOB_ID = 'data-pruning-repeat-scheduler';
 let queue: Queue | null = null;
 let worker: Worker | null = null;
 
+const isInProcessPruningEnabled = (): boolean => {
+  const raw = process.env.DATA_PRUNING_IN_PROCESS_ENABLED;
+  if (raw === undefined) {
+    return false;
+  }
+  return ['1', 'true', 'yes', 'on'].includes(raw.trim().toLowerCase());
+};
+
 export const startDataPruningJob = async (): Promise<void> => {
   const config = getDataRetentionConfig();
 
   if (!config.enabled) {
     logger.info('Data pruning scheduler is disabled by configuration');
+    return;
+  }
+
+  if (!isInProcessPruningEnabled()) {
+    logger.info(
+      'In-process data pruning scheduler is disabled; pruning is expected to run as a Kubernetes CronJob against the shared volume/object store',
+      { hint: 'Set DATA_PRUNING_IN_PROCESS_ENABLED=true to enable in-process pruning (single-replica/dev only)' },
+    );
     return;
   }
 
