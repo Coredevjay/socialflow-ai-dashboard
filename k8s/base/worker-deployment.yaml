@@ -23,12 +23,33 @@ spec:
       containers:
         - name: worker
           image: socialflow-worker:latest
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: Always
+          ports:
+            - name: health
+              containerPort: 3002
           envFrom:
             - configMapRef:
                 name: socialflow-config
             - secretRef:
                 name: socialflow-secrets
+          # Liveness fails if the event loop is blocked (deadlock);
+          # readiness fails if a worker loses its Redis connection.
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: health
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
           lifecycle:
             preStop:
               exec:

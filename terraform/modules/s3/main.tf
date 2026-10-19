@@ -26,6 +26,35 @@ resource "aws_s3_bucket_public_access_block" "main" {
   restrict_public_buckets = true
 }
 
+# Reject any request that is not made over TLS
+resource "aws_s3_bucket_policy" "deny_insecure_transport" {
+  bucket = aws_s3_bucket.main.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid       = "DenyInsecureTransport"
+      Effect    = "Deny"
+      Principal = "*"
+      Action    = "s3:*"
+      Resource = [
+        aws_s3_bucket.main.arn,
+        "${aws_s3_bucket.main.arn}/*",
+      ]
+      Condition = {
+        Bool = { "aws:SecureTransport" = "false" }
+      }
+    }]
+  })
+}
+
+# Server access logging is opt-in: set logging_target_bucket to a separate bucket
+resource "aws_s3_bucket_logging" "main" {
+  count         = var.logging_target_bucket == null ? 0 : 1
+  bucket        = aws_s3_bucket.main.id
+  target_bucket = var.logging_target_bucket
+  target_prefix = "s3-access/${var.bucket_name}/"
+}
+
 resource "aws_s3_bucket_lifecycle_configuration" "main" {
   bucket = aws_s3_bucket.main.id
 
@@ -34,6 +63,14 @@ resource "aws_s3_bucket_lifecycle_configuration" "main" {
     status = "Enabled"
     filter { prefix = "uploads/" }
     expiration { days = var.env == "prod" ? 365 : 30 }
+  }
+
+  # Clean up incomplete multipart uploads from any prefix after 1 day
+  rule {
+    id     = "abort-incomplete-multipart-uploads"
+    status = "Enabled"
+    filter {}
+    abort_incomplete_multipart_upload { days_after_initiation = 1 }
   }
 
   rule {

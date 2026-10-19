@@ -36,32 +36,57 @@ export async function withCache<T>(
   return value;
 }
 
-/** Delete one or more cache keys. Supports glob patterns via SCAN. */
+/** Glob metacharacters understood by Redis SCAN MATCH. */
+const GLOB_PATTERN = /[*?[\]]/;
+
+/**
+ * Walk the keyspace with SCAN and UNLINK each page as soon as it is read.
+ * Deleting per page keeps memory bounded for large keyspaces — buffering
+ * every match before a single UNLINK can hold the whole keyspace in memory.
+ */
+async function unlinkByPattern(redis: Redis, fullPattern: string): Promise<void> {
+  let cursor = '0';
+
+  do {
+    const [next, batch] = await redis.scan(cursor, 'MATCH', fullPattern, 'COUNT', 100);
+    cursor = next;
+    if (batch.length > 0) {
+      await redis.unlink(...batch);
+    }
+  } while (cursor !== '0');
+}
+
+/**
+ * Delete one or more cache keys. Keys containing glob metacharacters
+ * (`*`, `?`, `[...]`) are expanded through SCAN and UNLINK; plain keys are
+ * deleted with a single pipeline so the common case stays one round-trip.
+ */
 export async function invalidateCache(...keys: string[]): Promise<void> {
   const redis = getRedis();
-  const pipeline = redis.pipeline();
+  const literalKeys: string[] = [];
+
   for (const key of keys) {
-    pipeline.del(`${CACHE_PREFIX}${key}`);
+    if (GLOB_PATTERN.test(key)) {
+      await unlinkByPattern(redis, `${CACHE_PREFIX}${key}`);
+    } else {
+      literalKeys.push(`${CACHE_PREFIX}${key}`);
+    }
+  }
+
+  if (literalKeys.length === 0) {
+    return;
+  }
+
+  const pipeline = redis.pipeline();
+  for (const key of literalKeys) {
+    pipeline.del(key);
   }
   await pipeline.exec();
 }
 
 /** Delete all cache keys matching a pattern (e.g. "org:*"). */
 export async function invalidateCachePattern(pattern: string): Promise<void> {
-  const redis = getRedis();
-  const fullPattern = `${CACHE_PREFIX}${pattern}`;
-  let cursor = '0';
-  const keys: string[] = [];
-
-  do {
-    const [next, batch] = await redis.scan(cursor, 'MATCH', fullPattern, 'COUNT', 100);
-    cursor = next;
-    keys.push(...batch);
-  } while (cursor !== '0');
-
-  if (keys.length > 0) {
-    await redis.unlink(...keys);
-  }
+  await unlinkByPattern(getRedis(), `${CACHE_PREFIX}${pattern}`);
 }
 
 export const CacheTTL = {

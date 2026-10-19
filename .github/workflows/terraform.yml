@@ -1,0 +1,84 @@
+name: Terraform
+
+on:
+  pull_request:
+    paths:
+      - 'terraform/**'
+      - '.github/workflows/terraform.yml'
+  push:
+    branches: [develop, staging, main, master]
+    paths:
+      - 'terraform/**'
+      - '.github/workflows/terraform.yml'
+
+jobs:
+  fmt:
+    name: Format check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - name: terraform fmt
+        run: terraform fmt -check -recursive
+        working-directory: terraform
+
+  validate:
+    name: Validate (${{ matrix.dir }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        dir:
+          - bootstrap
+          - environments/dev
+          - environments/prod
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - name: Require provider lock file
+        run: |
+          if [ ! -f "terraform/${{ matrix.dir }}/.terraform.lock.hcl" ]; then
+            echo "ERROR: terraform/${{ matrix.dir }}/.terraform.lock.hcl is missing"
+            echo "Generate it with: terraform providers lock -platform=linux_amd64 -platform=linux_arm64 -platform=darwin_amd64 -platform=darwin_arm64 -platform=windows_amd64"
+            exit 1
+          fi
+
+      - name: terraform init (no backend)
+        run: terraform init -backend=false -lockfile=readonly -input=false
+        working-directory: terraform/${{ matrix.dir }}
+
+      - name: terraform validate
+        run: terraform validate
+        working-directory: terraform/${{ matrix.dir }}
+
+  tflint:
+    name: TFLint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: terraform-linters/setup-tflint@v4
+
+      - name: tflint init
+        run: tflint --init
+
+      - name: tflint
+        run: tflint --recursive --format compact
+        working-directory: terraform
+
+  security-scan:
+    name: Checkov security scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Run Checkov
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: terraform
+          framework: terraform
+          quiet: true

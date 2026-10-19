@@ -10,6 +10,7 @@ const envSchema = z
     // ── Server ────────────────────────────────────────────────────────────────
     NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
     BACKEND_PORT: z.coerce.number().int().positive().default(3001),
+    CORS_ALLOWED_ORIGINS: z.string().optional(),
 
     // ── Database ──────────────────────────────────────────────────────────────
     // DATABASE_URL can be provided directly (local/test) or assembled at
@@ -101,6 +102,9 @@ const envSchema = z
     GOOGLE_TTS_API_KEY: z.string().optional(),
 
     // ── Billing ───────────────────────────────────────────────────────────────
+    // STRIPE_SECRET_KEY enables billing. When it is set, STRIPE_WEBHOOK_SECRET
+    // is also required (enforced in superRefine below) so the app fails at
+    // startup rather than on the first webhook delivery.
     STRIPE_SECRET_KEY: z.string().min(1, 'STRIPE_SECRET_KEY is required'),
     STRIPE_WEBHOOK_SECRET: z.string().optional(),
 
@@ -201,10 +205,16 @@ const envSchema = z
     MEILISEARCH_SEARCH_KEY: z.string().optional(),
 
     // ── Moderation ────────────────────────────────────────────────────────────
+    // OpenAI key used by ModerationService. Optional: when unset, moderation
+    // falls back to the configured MODERATION_MODE behaviour.
+    OPENAI_API_KEY: z.string().optional(),
     // fail-closed (default): block content when provider is unavailable — safer for production.
     // fail-open: allow content through when provider is unavailable — requires explicit opt-in.
     MODERATION_MODE: z.enum(['fail-open', 'fail-closed']).default('fail-closed'),
+    // Threshold preset: low (permissive), medium (default), high (strict).
     MODERATION_SENSITIVITY: z.enum(['low', 'medium', 'high']).default('medium'),
+    // Comma-separated list of additional terms that are always blocked.
+    MODERATION_ALWAYS_BLOCK_EXTRA: z.string().default(''),
 
     // ── AWS S3 ────────────────────────────────────────────────────────────────
     S3_PRESIGNED_URL_EXPIRY_SECONDS: z.coerce.number().int().positive().default(3600),
@@ -225,6 +235,18 @@ const envSchema = z
         path: ['DATABASE_URL'],
         message:
           'Either DATABASE_URL or the full set of DB_HOST/DB_NAME/DB_USER/DB_PASSWORD must be set',
+      });
+    }
+
+    // Billing is enabled whenever STRIPE_SECRET_KEY is set (it is required).
+    // Webhook handling needs the signing secret, so require it up front rather
+    // than throwing on the first webhook delivery.
+    if (data.STRIPE_SECRET_KEY && !data.STRIPE_WEBHOOK_SECRET) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['STRIPE_WEBHOOK_SECRET'],
+        message:
+          'STRIPE_WEBHOOK_SECRET is required when billing is enabled (STRIPE_SECRET_KEY is set)',
       });
     }
   });

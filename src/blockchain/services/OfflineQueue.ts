@@ -9,11 +9,38 @@ interface QueuedTransaction {
   timestamp: number;
 }
 
+/**
+ * The subset of the Redis client surface OfflineQueue uses. Satisfied by
+ * ioredis and by the localStorage-backed browser store in browserQueueStore.ts.
+ */
+export interface OfflineQueueRedis {
+  eval(script: string, numKeys: number, ...args: (string | number)[]): Promise<unknown>;
+  hvals(key: string): Promise<string[]>;
+  hdel(key: string, field: string): Promise<number>;
+  hlen(key: string): Promise<number>;
+  del(key: string): Promise<number>;
+}
+
+/** Generates a collision-resistant, unpredictable transaction id. */
+function generateTransactionId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return `tx_${crypto.randomUUID()}`;
+  }
+  // Fallback for insecure contexts where crypto.randomUUID is unavailable.
+  const bytes = new Uint8Array(16);
+  if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+    crypto.getRandomValues(bytes);
+  } else {
+    for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
+  }
+  return `tx_${Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')}`;
+}
+
 export class OfflineQueue {
   private readonly QUEUE_KEY = 'stellar:offline:queue';
   private readonly QUEUE_TTL = 7 * 24 * 60 * 60; // 7 days in seconds
   private readonly MAX_QUEUE_SIZE: number;
-  private redis: any;
+  private redis: OfflineQueueRedis | undefined;
   private inMemoryQueue: QueuedTransaction[] = [];
 
   // Atomically checks the hash size against MAX_QUEUE_SIZE and, if there's
@@ -33,7 +60,7 @@ export class OfflineQueue {
     return 1
   `;
 
-  constructor(redisClient?: any, maxQueueSize = 1000) {
+  constructor(redisClient?: OfflineQueueRedis, maxQueueSize = 1000) {
     this.redis = redisClient;
     this.MAX_QUEUE_SIZE = maxQueueSize;
     if (!this.redis) {
@@ -46,7 +73,7 @@ export class OfflineQueue {
    * Throws if the queue has reached MAX_QUEUE_SIZE.
    */
   async queueTransaction(xdr: string): Promise<string> {
-    const id = `tx_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const id = generateTransactionId();
     const transaction: QueuedTransaction = {
       id,
       xdr,

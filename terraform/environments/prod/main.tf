@@ -79,9 +79,14 @@ module "ecs" {
   db_port             = 5432
   db_name             = var.db_name
   db_username         = var.db_username
-  db_password         = var.db_password
-  redis_url           = "rediss://${module.elasticache.primary_endpoint}:6379"
+  db_master_user_secret_arn = module.rds.master_user_secret_arn
+  redis_url           = module.elasticache.redis_url
   jwt_secret          = var.jwt_secret
+  jwt_refresh_secret  = var.jwt_refresh_secret
+  csrf_secret         = var.csrf_secret
+  stripe_secret_key   = var.stripe_secret_key
+  twitter_api_key     = var.twitter_api_key
+  twitter_api_secret  = var.twitter_api_secret
   s3_bucket           = module.s3.bucket_name
   aws_region          = var.aws_region
   service_domain      = var.service_domain
@@ -95,7 +100,6 @@ module "rds" {
   subnet_ids         = module.networking.private_subnet_ids
   db_name            = var.db_name
   db_username        = var.db_username
-  db_password        = var.db_password
   instance_class     = "db.t3.small"
   allocated_storage  = 50
   app_sg_id          = aws_security_group.app.id

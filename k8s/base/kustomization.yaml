@@ -14,4 +14,6 @@ resources:
   - worker-hpa.yaml
   - ingress.yaml
   - pdb.yaml
+  - worker-pdb.yaml
   - networkpolicy.yaml
+  - data-pruning-cronjob.yaml

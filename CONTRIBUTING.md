@@ -1,5 +1,17 @@
 # Contributing Guide
 
+## Running Tests
+
+Each workspace uses exactly one test runner:
+
+| Workspace | Location | Runner | Commands (run from that directory) |
+| --- | --- | --- | --- |
+| Frontend | repo root (`src/`, `components/`, `contexts/`, ...) | Vitest (`vitest.config.ts`) | `npm test`, `npm run test:run`, `npm run test:coverage` |
+| Backend | `backend/` | Jest (`backend/jest.config.js`) | `npm test --prefix backend`, `npm run test:coverage --prefix backend` |
+
+- `npm run test:ci` at the root runs the frontend suite, then the backend suite, the same way CI does.
+- Do not add a second runner or a root-level Jest config. New frontend tests use `vitest` globals and imports; new backend tests use Jest.
+
 ## Database Migrations
 
 ### Naming Convention

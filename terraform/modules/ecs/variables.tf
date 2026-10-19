@@ -77,6 +77,18 @@ variable "desired_count" {
   type        = number
 }
 
+variable "min_capacity" {
+  description = "Minimum number of task instances the ECS service auto scales down to"
+  type        = number
+  default     = 1
+}
+
+variable "max_capacity" {
+  description = "Maximum number of task instances the ECS service auto scales up to"
+  type        = number
+  default     = 10
+}
+
 variable "launch_type" {
   description = "ECS launch type for the service (FARGATE or EC2)"
   type        = string
@@ -115,4 +127,45 @@ variable "environment_variables" {
 variable "tags" {
   description = "Map of tags applied to all ECS resources"
   type        = map(string)
+}
+
+variable "jwt_secret" {
+  description = "Secret used to sign access tokens (JWT_SECRET)"
+  type        = string
+  sensitive   = true
+}
+
+variable "jwt_refresh_secret" {
+  description = "Secret used to sign refresh tokens (JWT_REFRESH_SECRET)"
+  type        = string
+  sensitive   = true
+}
+
+variable "csrf_secret" {
+  description = "Secret used for CSRF token generation (CSRF_SECRET)"
+  type        = string
+  sensitive   = true
+}
+
+variable "stripe_secret_key" {
+  description = "Stripe API secret key (STRIPE_SECRET_KEY)"
+  type        = string
+  sensitive   = true
+}
+
+variable "twitter_api_key" {
+  description = "Twitter API key (TWITTER_API_KEY)"
+  type        = string
+  sensitive   = true
+}
+
+variable "twitter_api_secret" {
+  description = "Twitter API secret (TWITTER_API_SECRET)"
+  type        = string
+  sensitive   = true
+}
+
+variable "db_master_user_secret_arn" {
+  description = "ARN of the Secrets Manager secret holding the RDS master password (module.rds.master_user_secret_arn)"
+  type        = string
 }
