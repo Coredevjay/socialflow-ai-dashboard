@@ -262,7 +262,48 @@ export class QueueManager extends EventEmitter {
   }
 
   /**
-   * Add a job to a queue
+   * Add a job to a queue.
+   *
+   * ## Idempotency contract
+   *
+   * BullMQ deduplicates jobs by `jobId`: if a job with the same `jobId` already
+   * exists in the queue (waiting, active, delayed, or completed within the
+   * `removeOnComplete` window) the enqueue is a no-op and the existing job's id
+   * is returned unchanged.
+   *
+   * To take advantage of deduplication, pass a **deterministic `jobId`** derived
+   * from the business key(s) of the logical operation, e.g.:
+   *
+   * ```ts
+   * // Deduplicate by user + platform
+   * await queueManager.addJob('social-sync', 'sync', data, {
+   *   jobId: `social-sync:${userId}:${platform}`,
+   * });
+   * ```
+   *
+   * When no `jobId` is supplied this method generates a random UUID so that
+   * every call produces a unique, non-colliding job.  This preserves the
+   * previous "fire and forget" behaviour for callers that do not need
+   * deduplication while avoiding the deprecated `String.prototype.substr` and
+   * the weak entropy of `Date.now() + Math.random()`.
+   *
+   * ### Repeat jobs
+   * For jobs registered with a `repeat` schedule, BullMQ manages the repeat key
+   * internally.  Passing a fixed `jobId` to a repeat job would pin the key and
+   * prevent BullMQ from scheduling subsequent runs; omit `jobId` for repeat jobs
+   * or use BullMQ's `repeat.key` option directly.
+   *
+   * @param queueName - Name of the target queue (must already be created).
+   * @param jobName   - BullMQ job type / name.
+   * @param data      - Serialisable job payload.
+   * @param options   - Optional overrides.
+   * @param options.jobId    - Deterministic business key for deduplication.
+   *                           Omit to get a random UUID (no deduplication).
+   * @param options.priority - Lower value = higher priority.
+   * @param options.delay    - Milliseconds to wait before the job becomes active.
+   * @param options.repeat   - BullMQ repeat options (cron / every).
+   * @param options.cron     - Shorthand cron string (sets repeat.pattern).
+   * @returns The BullMQ job id, or `undefined` if BullMQ did not assign one.
    */
   async addJob(
     queueName: string,
@@ -281,12 +322,17 @@ export class QueueManager extends EventEmitter {
       throw new Error(`Queue "${queueName}" not found`);
     }
 
+    // Use the caller-supplied deterministic id when provided so BullMQ
+    // deduplication works correctly.  Fall back to a random UUID (not
+    // Date.now()+Math.random()) so the id is unique and collision-free without
+    // relying on deprecated String.prototype.substr or weak entropy.
+    const jobId = options?.jobId ?? crypto.randomUUID();
+
     const job = await queue.add(jobName, data, {
       priority: options?.priority,
       delay: options?.delay,
       repeat: options?.repeat,
-      jobId:
-        options?.jobId ?? `${queueName}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      jobId,
     });
 
     logger.info(`Job "${jobName}" added to queue "${queueName}"`, {
