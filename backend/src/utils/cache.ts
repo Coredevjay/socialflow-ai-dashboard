@@ -1,6 +1,8 @@
 import Redis from 'ioredis';
 import { getRedisConnection } from '../config/runtime';
+import { createLogger } from '../lib/logger';
 
+const logger = createLogger('cache');
 const CACHE_PREFIX = 'cache:';
 
 /**
@@ -52,12 +54,18 @@ export interface WithCacheOptions {
 }
 
 /**
- * Cache-Aside helper with stampede protection and negative-result caching.
+ * Cache-Aside helper with stampede protection, negative-result caching, and
+ * corrupted-entry recovery.
  *
  * ## Cache hit
  * Returns the deserialised value immediately.  If the stored value is the
  * {@link SENTINEL}, `null` is returned — the upstream was previously
  * confirmed absent and the negative result is being served from cache.
+ *
+ * If the stored value cannot be parsed as JSON (corrupted entry or schema
+ * written by an older code version), the bad key is deleted and the request
+ * falls through to the fetch path as a cache miss.  A warning is logged so
+ * the event is observable without crashing the request.
  *
  * ## Cache miss — single-flight
  * If no in-flight fetch is already running for `key`, a new fetcher
@@ -94,7 +102,24 @@ export async function withCache<T>(
     if (cached === JSON.stringify(SENTINEL)) {
       return null as unknown as T;
     }
-    return JSON.parse(cached) as T;
+
+    // Parse the cached value.  If the entry is corrupted or was written by an
+    // older code version with a different shape, JSON.parse throws a
+    // SyntaxError.  Rather than letting that propagate and failing the
+    // request, we treat it as a miss: delete the bad key and fall through to
+    // the fetch path so the caller gets a fresh, valid result.
+    try {
+      return JSON.parse(cached) as T;
+    } catch (err) {
+      logger.warn('Cache entry could not be parsed — deleting and treating as miss', {
+        cacheKey,
+        error: err instanceof Error ? err.message : String(err),
+        rawLength: cached.length,
+      });
+      // Fire-and-forget deletion; if it fails the key will expire naturally.
+      redis.unlink(cacheKey).catch(() => {});
+      // Fall through to the fetch path below.
+    }
   }
 
   // ── 2. Single-flight: reuse an in-flight fetch if one is already running ──
