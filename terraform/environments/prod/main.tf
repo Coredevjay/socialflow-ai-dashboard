@@ -79,7 +79,7 @@ module "ecs" {
   db_port             = 5432
   db_name             = var.db_name
   db_username         = var.db_username
-  db_password         = var.db_password
+  db_master_user_secret_arn = module.rds.master_user_secret_arn
   redis_url           = module.elasticache.redis_url
   jwt_secret          = var.jwt_secret
   jwt_refresh_secret  = var.jwt_refresh_secret
@@ -100,7 +100,6 @@ module "rds" {
   subnet_ids         = module.networking.private_subnet_ids
   db_name            = var.db_name
   db_username        = var.db_username
-  db_password        = var.db_password
   instance_class     = "db.t3.small"
   allocated_storage  = 50
   app_sg_id          = aws_security_group.app.id

@@ -30,7 +30,7 @@ try {
 const WORKFLOWS_DIR = join(dirname(fileURLToPath(import.meta.url)), '../workflows');
 
 // Secrets that are intentionally optional (callers may fail gracefully without them)
-const OPTIONAL_SECRETS = new Set(['SNYK_TOKEN', 'SLACK_WEBHOOK_URL']);
+const OPTIONAL_SECRETS = new Set(['SNYK_TOKEN', 'SLACK_WEBHOOK_URL', 'K6_AUTH_TOKEN']);
 
 const files = readdirSync(WORKFLOWS_DIR).filter((f) => f.endsWith('.yml') || f.endsWith('.yaml'));
 

@@ -1,0 +1,107 @@
+name: k6 Load Test
+
+on:
+  schedule:
+    - cron: '0 2 * * *'  # Every day at 02:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  load-test:
+    name: Run k6 load test against backend
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: socialflow_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Detect k6 auth token availability
+        id: k6-token
+        run: echo "available=${{ secrets.K6_AUTH_TOKEN != '' }}" >> "$GITHUB_OUTPUT"
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci
+
+      - name: Apply database migrations
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/socialflow_test
+        run: npx prisma migrate deploy
+
+      - name: Build backend
+        working-directory: backend
+        run: npm run build
+
+      - name: Start backend
+        working-directory: backend
+        env:
+          NODE_ENV: test
+          BACKEND_PORT: 3001
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/socialflow_test
+          JWT_SECRET: ci-load-test-jwt-secret-not-for-production-use
+          JWT_REFRESH_SECRET: ci-load-test-refresh-secret-not-for-production-use
+          TWITTER_API_KEY: ci-placeholder
+          TWITTER_API_SECRET: ci-placeholder
+        run: |
+          nohup npm start > "$RUNNER_TEMP/backend.log" 2>&1 &
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:3001/api/v1/health > /dev/null; then
+              echo "Backend is healthy"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Backend did not become healthy in time"
+          cat "$RUNNER_TEMP/backend.log"
+          exit 1
+
+      - name: Install k6
+        if: steps.k6-token.outputs.available == 'true'
+        uses: grafana/setup-k6-action@v1
+
+      - name: Run k6 load test
+        if: steps.k6-token.outputs.available == 'true'
+        env:
+          BASE_URL: http://localhost:3001/api/v1
+          AUTH_TOKEN: ${{ secrets.K6_AUTH_TOKEN }}
+        run: k6 run --summary-export=k6-summary.json perf-tests/load-test.js
+
+      - name: k6 auth token notice
+        if: steps.k6-token.outputs.available != 'true'
+        run: echo "::notice::K6_AUTH_TOKEN is not set; skipping k6 load test."
+
+      - name: Upload k6 summary
+        if: always() && steps.k6-token.outputs.available == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: k6-summary-${{ github.run_id }}
+          path: k6-summary.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload backend log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-log-${{ github.run_id }}
+          path: ${{ runner.temp }}/backend.log
+          if-no-files-found: warn
+          retention-days: 7
