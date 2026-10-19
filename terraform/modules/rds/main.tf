@@ -15,13 +15,6 @@ resource "aws_security_group" "rds" {
     security_groups = [var.app_sg_id]
   }
 
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
   tags = { Name = "socialflow-${var.env}-rds-sg" }
 }
 
@@ -61,13 +54,21 @@ resource "aws_db_instance" "main" {
   storage_encrypted      = true
   db_name                = var.db_name
   username               = var.db_username
-  password               = var.db_password
+  # RDS generates the master password and stores it in a Secrets Manager secret,
+  # so the password never enters Terraform state, plan output or SSM.
+  manage_master_user_password = true
   db_subnet_group_name   = aws_db_subnet_group.main.name
   vpc_security_group_ids = [aws_security_group.rds.id]
   parameter_group_name   = aws_db_parameter_group.main.name
   skip_final_snapshot    = var.env == "dev"
+  final_snapshot_identifier = var.env == "dev" ? null : "socialflow-${var.env}-final-${formatdate("YYYYMMDDhhmmss", timestamp())}"
   deletion_protection    = var.enable_deletion_protection
   multi_az               = var.multi_az != null ? var.multi_az : var.env == "prod"
   backup_retention_period = var.backup_retention_days
   tags                   = { Env = var.env }
+
+  # The timestamp is only evaluated at creation; ignore later drift so it does not show as a change on every plan.
+  lifecycle {
+    ignore_changes = [final_snapshot_identifier]
+  }
 }
