@@ -45,27 +45,53 @@ resource "aws_db_parameter_group" "main" {
   tags = { Name = "socialflow-${var.env}-params" }
 }
 
+resource "aws_iam_role" "rds_monitoring" {
+  name = "socialflow-${var.env}-rds-monitoring"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action    = "sts:AssumeRole"
+      Effect    = "Allow"
+      Principal = { Service = "monitoring.rds.amazonaws.com" }
+    }]
+  })
+
+  tags = { Name = "socialflow-${var.env}-rds-monitoring" }
+}
+
+resource "aws_iam_role_policy_attachment" "rds_monitoring" {
+  role       = aws_iam_role.rds_monitoring.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonRDSEnhancedMonitoringRole"
+}
+
 resource "aws_db_instance" "main" {
-  identifier             = "socialflow-${var.env}"
-  engine                 = "postgres"
-  engine_version         = "15"
-  instance_class         = var.instance_class
-  allocated_storage      = var.allocated_storage
-  storage_encrypted      = true
-  db_name                = var.db_name
-  username               = var.db_username
+  identifier                      = "socialflow-${var.env}"
+  engine                          = "postgres"
+  engine_version                  = "15"
+  instance_class                  = var.instance_class
+  allocated_storage               = var.allocated_storage
+  storage_encrypted               = true
+  db_name                         = var.db_name
+  username                        = var.db_username
   # RDS generates the master password and stores it in a Secrets Manager secret,
   # so the password never enters Terraform state, plan output or SSM.
-  manage_master_user_password = true
-  db_subnet_group_name   = aws_db_subnet_group.main.name
-  vpc_security_group_ids = [aws_security_group.rds.id]
-  parameter_group_name   = aws_db_parameter_group.main.name
-  skip_final_snapshot    = var.env == "dev"
-  final_snapshot_identifier = var.env == "dev" ? null : "socialflow-${var.env}-final-${formatdate("YYYYMMDDhhmmss", timestamp())}"
-  deletion_protection    = var.enable_deletion_protection
-  multi_az               = var.multi_az != null ? var.multi_az : var.env == "prod"
-  backup_retention_period = var.backup_retention_days
-  tags                   = { Env = var.env }
+  manage_master_user_password     = true
+  db_subnet_group_name            = aws_db_subnet_group.main.name
+  vpc_security_group_ids          = [aws_security_group.rds.id]
+  parameter_group_name            = aws_db_parameter_group.main.name
+  skip_final_snapshot             = var.env == "dev"
+  final_snapshot_identifier       = var.env == "dev" ? null : "socialflow-${var.env}-final-${formatdate("YYYYMMDDhhmmss", timestamp())}"
+  deletion_protection             = var.enable_deletion_protection
+  multi_az                        = var.multi_az != null ? var.multi_az : var.env == "prod"
+  backup_retention_period         = var.backup_retention_days
+  enabled_cloudwatch_logs_exports = ["postgresql", "upgrade"]
+  performance_insights_enabled    = true
+  monitoring_interval             = 60
+  monitoring_role_arn             = aws_iam_role.rds_monitoring.arn
+  auto_minor_version_upgrade      = true
+  copy_tags_to_snapshot           = true
+  tags                            = { Env = var.env }
 
   # The timestamp is only evaluated at creation; ignore later drift so it does not show as a change on every plan.
   lifecycle {
