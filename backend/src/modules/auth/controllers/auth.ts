@@ -1,6 +1,5 @@
 import { Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
-import jwt from 'jsonwebtoken';
 import { randomUUID } from 'crypto';
 import { UserStore } from '../../../models/User';
 import { auditLogger } from '../../../services/AuditLogger';
@@ -8,24 +7,14 @@ import { PasswordHistoryService } from '../../../services/PasswordHistoryService
 import { AuthBlacklistService } from '../../../services/AuthBlacklistService';
 import { redisAccountLockoutStore } from '../../../services/AccountLockoutService';
 import { prisma } from '../../../lib/prisma';
-import { config } from '../../../config/config';
+import {
+  signAccessToken,
+  signRefreshToken,
+  verifyAccessToken,
+  verifyRefreshToken,
+} from '../../../lib/jwt';
 
 const SALT_ROUNDS = 12;
-
-const jwtSecret = () => config.JWT_SECRET;
-const jwtExpiresIn = () => config.JWT_EXPIRES_IN;
-const jwtRefreshSecret = () => config.JWT_REFRESH_SECRET;
-const jwtRefreshExpiresIn = () => config.JWT_REFRESH_EXPIRES_IN;
-
-function signAccess(userId: string): string {
-  return jwt.sign({ sub: userId }, jwtSecret(), { expiresIn: jwtExpiresIn() } as jwt.SignOptions);
-}
-
-function signRefresh(userId: string): string {
-  return jwt.sign({ sub: userId, jti: randomUUID() }, jwtRefreshSecret(), {
-    expiresIn: jwtRefreshExpiresIn(),
-  } as jwt.SignOptions);
-}
 
 export async function register(req: Request, res: Response): Promise<void> {
   const { email, password } = req.body as { email: string; password: string };
@@ -44,8 +33,8 @@ export async function register(req: Request, res: Response): Promise<void> {
     refreshTokens: [],
   });
 
-  const accessToken = signAccess(user.id);
-  const refreshToken = signRefresh(user.id);
+  const accessToken = signAccessToken(user.id);
+  const refreshToken = signRefreshToken(user.id);
   await UserStore.update(user.id, { refreshTokens: [refreshToken] });
 
   auditLogger.log({
@@ -81,8 +70,8 @@ export async function login(req: Request, res: Response): Promise<void> {
 
   const rotationRequired = await PasswordHistoryService.isRotationRequired(user.id);
 
-  const accessToken = signAccess(user.id);
-  const refreshToken = signRefresh(user.id);
+  const accessToken = signAccessToken(user.id);
+  const refreshToken = signRefreshToken(user.id);
   await UserStore.update(user.id, { refreshTokens: [...user.refreshTokens, refreshToken] });
 
   auditLogger.log({
@@ -97,16 +86,16 @@ export async function login(req: Request, res: Response): Promise<void> {
 export async function refresh(req: Request, res: Response): Promise<void> {
   const { refreshToken } = req.body as { refreshToken: string };
 
-  let payload: jwt.JwtPayload;
+  let payload: { sub: string; exp?: number };
   try {
-    payload = jwt.verify(refreshToken, jwtRefreshSecret()) as jwt.JwtPayload;
+    payload = verifyRefreshToken(refreshToken);
   } catch {
     res.status(401).json({ message: 'Invalid or expired refresh token' });
     return;
   }
 
-  const user = await UserStore.findById(payload.sub as string);
-  if (!user || !user.refreshTokens.includes(refreshToken)) {
+  const user = await UserStore.findById(payload.sub);
+  if (!user || user.deletedAt || !user.refreshTokens.includes(refreshToken)) {
     res.status(401).json({ message: 'Refresh token revoked' });
     return;
   }
@@ -117,26 +106,26 @@ export async function refresh(req: Request, res: Response): Promise<void> {
   await AuthBlacklistService.blacklistToken(tokenKey, ttl);
 
   // Rotate refresh token
-  const newRefresh = signRefresh(user.id);
+  const newRefresh = signRefreshToken(user.id);
   await UserStore.update(user.id, {
     refreshTokens: [...user.refreshTokens.filter((t) => t !== refreshToken), newRefresh],
   });
 
-  res.json({ accessToken: signAccess(user.id), refreshToken: newRefresh });
+  res.json({ accessToken: signAccessToken(user.id), refreshToken: newRefresh });
 }
 
 export async function logout(req: Request, res: Response): Promise<void> {
   const { refreshToken } = req.body as { refreshToken: string };
 
-  let payload: jwt.JwtPayload;
+  let payload: { sub: string; exp?: number };
   try {
-    payload = jwt.verify(refreshToken, jwtRefreshSecret()) as jwt.JwtPayload;
+    payload = verifyRefreshToken(refreshToken);
   } catch {
     res.status(401).json({ message: 'Invalid token' });
     return;
   }
 
-  const user = await UserStore.findById(payload.sub as string);
+  const user = await UserStore.findById(payload.sub);
   if (user) {
     await UserStore.update(user.id, {
       refreshTokens: user.refreshTokens.filter((t) => t !== refreshToken),
@@ -154,7 +143,7 @@ export async function logout(req: Request, res: Response): Promise<void> {
   if (authHeader?.startsWith('Bearer ')) {
     const accessToken = authHeader.slice(7);
     try {
-      const accessPayload = jwt.verify(accessToken, jwtSecret()) as jwt.JwtPayload;
+      const accessPayload = verifyAccessToken(accessToken);
       const tokenKey = AuthBlacklistService.keyFromPayload(accessPayload);
       const ttl = accessPayload.exp
         ? accessPayload.exp - Math.floor(Date.now() / 1000)
@@ -210,7 +199,7 @@ export async function changePassword(req: Request, res: Response): Promise<void>
   if (authHeader?.startsWith('Bearer ')) {
     const accessToken = authHeader.slice(7);
     try {
-      const accessPayload = jwt.verify(accessToken, jwtSecret()) as jwt.JwtPayload;
+      const accessPayload = verifyAccessToken(accessToken);
       const tokenKey = AuthBlacklistService.keyFromPayload(accessPayload);
       const ttl = accessPayload.exp
         ? accessPayload.exp - Math.floor(Date.now() / 1000)

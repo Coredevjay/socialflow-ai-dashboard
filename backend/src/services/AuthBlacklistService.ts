@@ -1,19 +1,25 @@
 import Redis from 'ioredis';
 import { redis } from '../lib/redis';
 import { createLogger } from '../lib/logger';
+import { authBlacklistRedisErrorsTotal, authBlacklistFallbackHitsTotal } from '../lib/metrics';
 
 const logger = createLogger('AuthBlacklistService');
 
 const BLACKLIST_PREFIX = 'jwt:blacklist:';
 
-// In-memory LRU fallback for recently blacklisted tokens
+// In-memory LRU fallback for recently blacklisted tokens.
+// NOTE: this cache is per-process and only contains tokens revoked by this
+// replica, so it is NOT a substitute for Redis across replicas.
 const LRU_MAX = 1000;
-const lruCache = new Map<string, number>(); // key -> expiry epoch ms
+const lruCache = new Map<string, number>(); // key -> expiry epoch ms (insertion order == recency order)
 
 function lruSet(key: string, ttlSeconds: number): void {
+  // Delete first so re-inserting moves the key to the most-recently-used end.
+  lruCache.delete(key);
   if (lruCache.size >= LRU_MAX) {
-    const firstKey = lruCache.keys().next().value;
-    if (firstKey !== undefined) lruCache.delete(firstKey);
+    // Evict the least-recently-used entry (first in insertion order).
+    const oldestKey = lruCache.keys().next().value;
+    if (oldestKey !== undefined) lruCache.delete(oldestKey);
   }
   lruCache.set(key, Date.now() + ttlSeconds * 1000);
 }
@@ -25,11 +31,26 @@ function lruHas(key: string): boolean {
     lruCache.delete(key);
     return false;
   }
+  // Refresh recency: delete-then-set moves the key to the MRU end.
+  lruCache.delete(key);
+  lruCache.set(key, expiry);
   return true;
 }
 
+/**
+ * Whether blacklist checks should fail closed (deny the request) when Redis
+ * is unavailable. Defaults to true: an outage must not silently re-enable
+ * revoked tokens. Set AUTH_BLACKLIST_FAIL_CLOSED=false to opt into fail-open
+ * behaviour backed by the per-process fallback cache.
+ */
+function isFailClosed(): boolean {
+  const raw = process.env.AUTH_BLACKLIST_FAIL_CLOSED;
+  if (raw === undefined) return true;
+  return raw.toLowerCase() !== 'false' && raw !== '0';
+}
+
 function incrementRedisErrorCounter(): void {
-  logger.warn('metric: auth_blacklist_redis_errors_total +1');
+  authBlacklistRedisErrorsTotal.inc();
 }
 
 /**
@@ -50,6 +71,17 @@ function getRedis(): Redis {
   return redis;
 }
 
+/**
+ * Thrown by isBlacklisted when Redis is unavailable and the blacklist is
+ * configured to fail closed. Callers should translate this to HTTP 503.
+ */
+export class AuthBlacklistUnavailableError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = 'AuthBlacklistUnavailableError';
+  }
+}
+
 export const AuthBlacklistService = {
   /**
    * Blacklist an access token until it naturally expires.
@@ -68,8 +100,13 @@ export const AuthBlacklistService = {
 
   /**
    * Returns true if the token has been blacklisted.
-   * On Redis error, logs a warning, increments the error counter, and falls
-   * back to the in-memory LRU cache so valid tokens are not blocked.
+   *
+   * On Redis error the policy is explicit:
+   *  - fail-closed (default, AUTH_BLACKLIST_FAIL_CLOSED unset/true): throws
+   *    AuthBlacklistUnavailableError so callers can respond 503 instead of
+   *    accepting a possibly-revoked token.
+   *  - fail-open (AUTH_BLACKLIST_FAIL_CLOSED=false): falls back to the
+   *    per-process LRU cache and records a fallback-hit metric.
    */
   isBlacklisted: async (tokenKey: string): Promise<boolean> => {
     try {
@@ -77,6 +114,11 @@ export const AuthBlacklistService = {
       return result !== null;
     } catch (err) {
       incrementRedisErrorCounter();
+      if (isFailClosed()) {
+        logger.error('Redis unavailable for blacklist check — failing closed', { tokenKey, err });
+        throw new AuthBlacklistUnavailableError('Token blacklist unavailable', { cause: err });
+      }
+      authBlacklistFallbackHitsTotal.inc();
       logger.warn('Redis unavailable for blacklist check — falling back to LRU cache', { tokenKey, err });
       return lruHas(tokenKey);
     }
@@ -84,7 +126,10 @@ export const AuthBlacklistService = {
 
   /**
    * Derive a stable cache key from JWT payload fields.
-   * Prefers jti; falls back to "<sub>:<iat>" so we never store the raw token.
+   * Prefers jti (unique per token, added to access tokens so two tokens issued
+   * to the same subject in the same second do not collide). Falls back to
+   * "<sub>:<iat>" only for legacy tokens issued before jti was added, so we
+   * never store the raw token.
    */
   keyFromPayload: (payload: { sub?: string; jti?: string; iat?: number }): string => {
     if (payload.jti) return payload.jti;
