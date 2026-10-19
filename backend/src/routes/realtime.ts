@@ -1,9 +1,8 @@
 import { Router, Response } from 'express';
-import jwt from 'jsonwebtoken';
 import { AuthRequest } from '../middleware/authenticate';
 import { eventBus, JobProgressEvent } from '../lib/eventBus';
 import { createLogger } from '../lib/logger';
-import { config } from '../config/config';
+import { verifyAccessToken } from '../lib/jwt';
 import { sseTicketService } from '../services/SSETicketService';
 
 const router = Router();
@@ -59,7 +58,7 @@ router.get('/stream', (req: AuthRequest, res: Response) => {
     }
 
     try {
-      const payload = jwt.verify(token, config.JWT_SECRET) as jwt.JwtPayload;
+      const payload = verifyAccessToken(token);
       userId = payload.sub as string;
     } catch {
       res.status(401).json({ message: 'Invalid or expired token' });

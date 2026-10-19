@@ -4,12 +4,10 @@ import { authenticate as authMiddleware } from '../middleware/authenticate';
 import { checkPermission } from '../middleware/checkPermission';
 import { linkedInService, LinkedInShareRequest } from '../services/LinkedInService';
 import { createLogger } from '../lib/logger';
-import { redis } from '../lib/redis';
+import { saveOAuthState, consumeOAuthState } from '../lib/redis';
 
 const router = Router();
 const logger = createLogger('linkedin-routes');
-
-const OAUTH_STATE_TTL = 600;
 
 /**
  * GET /api/v1/linkedin/auth
@@ -19,11 +17,12 @@ router.get('/auth', authMiddleware, async (req: Request, res: Response) => {
   if (!linkedInService.isConfigured()) {
     return res.status(503).json({ error: 'LinkedIn API not configured.' });
   }
-  const state = crypto.randomBytes(16).toString('hex');
   const userId = (req as any).user?.id;
-  if (userId) {
-    await redis.set(`oauth:state:linkedin:${userId}`, state, 'EX', OAUTH_STATE_TTL);
+  if (!userId) {
+    return res.status(500).json({ error: 'Unable to initiate OAuth flow.' });
   }
+  const state = crypto.randomBytes(16).toString('hex');
+  await saveOAuthState('linkedin', state, userId);
   return res.redirect(linkedInService.getAuthUrl(state));
 });
 
@@ -47,13 +46,9 @@ router.get('/callback', async (req: Request, res: Response) => {
     return res.status(400).json({ error: 'Missing state parameter.' });
   }
 
-  const userId = (req as any).user?.id;
-  if (userId) {
-    const storedState = await redis.get(`oauth:state:linkedin:${userId}`);
-    await redis.del(`oauth:state:linkedin:${userId}`);
-    if (storedState !== state) {
-      return res.status(400).json({ error: 'Invalid state parameter.' });
-    }
+  const userId = await consumeOAuthState('linkedin', state);
+  if (!userId) {
+    return res.status(400).json({ error: 'Invalid state parameter.' });
   }
 
   try {

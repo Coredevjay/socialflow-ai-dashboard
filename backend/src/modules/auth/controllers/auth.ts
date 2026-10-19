@@ -8,7 +8,12 @@ import { PasswordHistoryService } from '../../../services/PasswordHistoryService
 import { AuthBlacklistService } from '../../../services/AuthBlacklistService';
 import { redisAccountLockoutStore } from '../../../services/AccountLockoutService';
 import { prisma } from '../../../lib/prisma';
-import { config } from '../../../config/config';
+import {
+  signAccessToken,
+  signRefreshToken,
+  verifyAccessToken,
+  verifyRefreshToken,
+} from '../../../lib/jwt';
 
 const SALT_ROUNDS = 12;
 
@@ -141,16 +146,16 @@ export async function login(req: Request, res: Response): Promise<void> {
 export async function refresh(req: Request, res: Response): Promise<void> {
   const { refreshToken } = req.body as { refreshToken: string };
 
-  let payload: jwt.JwtPayload;
+  let payload: { sub: string; exp?: number };
   try {
-    payload = jwt.verify(refreshToken, jwtRefreshSecret()) as jwt.JwtPayload;
+    payload = verifyRefreshToken(refreshToken);
   } catch {
     res.status(401).json({ message: 'Invalid or expired refresh token' });
     return;
   }
 
   const user = await UserStore.findById(payload.sub as string);
-  if (!user) {
+  if (!user || user.deletedAt) {
     res.status(401).json({ message: 'Refresh token revoked' });
     return;
   }
@@ -199,21 +204,21 @@ export async function refresh(req: Request, res: Response): Promise<void> {
     }),
   ]);
 
-  res.json({ accessToken: signAccess(user.id), refreshToken: newRefresh });
+  res.json({ accessToken: signAccessToken(user.id), refreshToken: newRefresh });
 }
 
 export async function logout(req: Request, res: Response): Promise<void> {
   const { refreshToken } = req.body as { refreshToken: string };
 
-  let payload: jwt.JwtPayload;
+  let payload: { sub: string; exp?: number };
   try {
-    payload = jwt.verify(refreshToken, jwtRefreshSecret()) as jwt.JwtPayload;
+    payload = verifyRefreshToken(refreshToken);
   } catch {
     res.status(401).json({ message: 'Invalid token' });
     return;
   }
 
-  const user = await UserStore.findById(payload.sub as string);
+  const user = await UserStore.findById(payload.sub);
   if (user) {
     // Revoke the whole token family this session belongs to.
     const stored = await prisma.refreshToken.findUnique({
@@ -235,7 +240,7 @@ export async function logout(req: Request, res: Response): Promise<void> {
   if (authHeader?.startsWith('Bearer ')) {
     const accessToken = authHeader.slice(7);
     try {
-      const accessPayload = jwt.verify(accessToken, jwtSecret()) as jwt.JwtPayload;
+      const accessPayload = verifyAccessToken(accessToken);
       const tokenKey = AuthBlacklistService.keyFromPayload(accessPayload);
       const ttl = accessPayload.exp
         ? accessPayload.exp - Math.floor(Date.now() / 1000)
@@ -291,7 +296,7 @@ export async function changePassword(req: Request, res: Response): Promise<void>
   if (authHeader?.startsWith('Bearer ')) {
     const accessToken = authHeader.slice(7);
     try {
-      const accessPayload = jwt.verify(accessToken, jwtSecret()) as jwt.JwtPayload;
+      const accessPayload = verifyAccessToken(accessToken);
       const tokenKey = AuthBlacklistService.keyFromPayload(accessPayload);
       const ttl = accessPayload.exp
         ? accessPayload.exp - Math.floor(Date.now() / 1000)

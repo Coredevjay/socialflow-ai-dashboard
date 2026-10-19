@@ -4,12 +4,10 @@ import { authenticate as authMiddleware } from '../middleware/authenticate';
 import { youTubeService } from '../services/YouTubeService';
 import { enqueueYouTubeSync } from '../jobs/youtubeSyncJob';
 import { createLogger } from '../lib/logger';
-import { redis } from '../lib/redis';
+import { saveOAuthState, consumeOAuthState } from '../lib/redis';
 
 const router = Router();
 const logger = createLogger('youtube-routes');
-
-const OAUTH_STATE_TTL = 600;
 
 /**
  * GET /api/youtube/auth
@@ -21,9 +19,10 @@ router.get('/auth', authMiddleware, async (req: Request, res: Response) => {
   }
   const state = crypto.randomBytes(16).toString('hex');
   const userId = (req as any).user?.id;
-  if (userId) {
-    await redis.set(`oauth:state:youtube:${userId}`, state, 'EX', OAUTH_STATE_TTL);
+  if (!userId) {
+    return res.status(500).json({ error: 'Unable to initiate OAuth flow.' });
   }
+  await saveOAuthState('youtube', state, userId);
   return res.redirect(youTubeService.getAuthUrl(state));
 });
 
@@ -48,19 +47,15 @@ router.get('/callback', async (req: Request, res: Response) => {
     return res.status(400).json({ error: 'Missing state parameter.' });
   }
 
-  const userId = (req as any).user?.id;
-  if (userId) {
-    const storedState = await redis.get(`oauth:state:youtube:${userId}`);
-    await redis.del(`oauth:state:youtube:${userId}`);
-    if (storedState !== state) {
-      return res.status(400).json({ error: 'Invalid state parameter.' });
-    }
+  const userId = await consumeOAuthState('youtube', state);
+  if (!userId) {
+    return res.status(400).json({ error: 'Invalid state parameter.' });
   }
 
   try {
     const tokens = await youTubeService.exchangeCode(code);
     // Trigger an immediate sync with the fresh tokens
-    await enqueueYouTubeSync(tokens);
+    await enqueueYouTubeSync(tokens, userId);
     return res.json({
       message: 'YouTube connected. Analytics sync queued.',
       expiresAt: tokens.expiresAt,
