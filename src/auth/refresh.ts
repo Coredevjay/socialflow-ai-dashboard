@@ -271,7 +271,12 @@ export function isRefreshUrl(url: string): boolean {
  */
 export type FetchFn = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
-export function withRefreshInterceptor(originalFetch: FetchFn): FetchFn {
+export type UnauthorizedHandler = () => Promise<string | null | undefined>;
+
+export function withRefreshInterceptor(
+  originalFetch: FetchFn,
+  onUnauthorized?: UnauthorizedHandler,
+): FetchFn {
   return async function interceptedFetch(
     input: RequestInfo | URL,
     init?: RequestInit,
@@ -295,16 +300,23 @@ export function withRefreshInterceptor(originalFetch: FetchFn): FetchFn {
     }
 
     // --- First 401: attempt single-flight refresh ---
+    let newToken: string | null | undefined;
     try {
-      await refreshTokens();
+      if (onUnauthorized) {
+        // Caller-supplied refresh (e.g. HttpOnly refresh cookie); the token is not stored here.
+        newToken = await onUnauthorized();
+        if (!newToken) return response;
+      } else {
+        await refreshTokens();
+        newToken = getAccessToken();
+      }
     } catch {
       // Refresh failed — handleRefreshFailure() already ran inside refreshTokens().
       return response;
     }
 
     // Rebuild headers with the new access token.
-    const newToken = getAccessToken();
-    const newInit = injectAuthHeader(init, newToken);
+    const newInit = injectAuthHeader(init, newToken ?? null);
 
     // Replay the original request.
     response = await originalFetch(input, newInit);

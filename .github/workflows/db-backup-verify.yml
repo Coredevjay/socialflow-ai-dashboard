@@ -5,10 +5,18 @@ on:
     - cron: '0 3 * * 0'  # Every Sunday at 03:00 UTC
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   verify-backup:
     name: Restore and verify latest backup
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    permissions:
+      contents: read
+      id-token: write  # GitHub OIDC -> AWS role assumption
 
     services:
       postgres:
@@ -29,8 +37,7 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v6
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: ${{ secrets.AWS_BACKUP_VERIFY_ROLE_ARN }}
           aws-region: ${{ secrets.AWS_REGION }}
 
       - name: Fetch latest backup key from S3
@@ -51,7 +58,7 @@ jobs:
         env:
           PGPASSWORD: verify_pass
         run: |
-          psql -h 127.0.0.1 -U verify_user -d verify_db -f /tmp/restore.sql
+          psql -h 127.0.0.1 -U verify_user -d verify_db -v ON_ERROR_STOP=1 -f /tmp/restore.sql
 
       - name: Run row count checks
         id: checks

@@ -5,16 +5,20 @@ on:
   push:
     branches: [develop, staging, main, master]
 
+permissions:
+  contents: read
+
 jobs:
   k8s-lint:
     name: Kubernetes Manifest Lint
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
 
       - name: Install kustomize
         run: |
-          curl -sL "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
+          curl -sL "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/kustomize/v5.4.3/hack/install_kustomize.sh" | bash -s 5.4.3 .
           sudo mv kustomize /usr/local/bin/
 
       - name: Render dev overlay
@@ -77,12 +81,13 @@ jobs:
   security:
     name: Security Vulnerability Scan
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          node-version: "22"
 
       - name: Audit root workspace dependencies
         run: npm audit --audit-level=high
@@ -123,13 +128,14 @@ jobs:
       contents: read
       pull-requests: write
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          node-version: "22"
           cache: "npm"
           cache-dependency-path: package-lock.json
 
@@ -177,7 +183,7 @@ jobs:
 
       - name: Upload coverage report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: coverage-report
           path: backend/coverage/
@@ -206,6 +212,7 @@ jobs:
   docker-build:
     name: Docker Build & Prisma Migrate Smoke Test
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     services:
       postgres:
         image: postgres:15
