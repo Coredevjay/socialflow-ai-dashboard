@@ -5,6 +5,7 @@ import { useJobs } from '../../contexts/JobsContext';
 const AUTO_DISMISS_MS = 10000;
 
 /** Compact, collapsible list of active/recent background jobs, mounted once in the app layout. */
+/** Compact, collapsible list of active/recent background jobs, mounted once in the app layout. */
 export const JobProgressPanel: React.FC = () => {
   const { jobs, jobEvents, removeJob } = useJobs();
   const [collapsed, setCollapsed] = useState(false);
