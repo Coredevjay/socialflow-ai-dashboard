@@ -80,7 +80,7 @@ router.get('/channel', async (req: Request, res: Response) => {
     return res.json(channel);
   } catch (err) {
     logger.error('Failed to fetch channel', { error: (err as Error).message });
-    return res.status(502).json({ error: (err as Error).message });
+    return res.status(502).json({ error: 'Internal server error' });
   }
 });
 
@@ -104,7 +104,7 @@ router.get('/videos/stats', async (req: Request, res: Response) => {
     return res.json(stats);
   } catch (err) {
     logger.error('Failed to fetch video stats', { error: (err as Error).message });
-    return res.status(502).json({ error: (err as Error).message });
+    return res.status(502).json({ error: 'Internal server error' });
   }
 });
 

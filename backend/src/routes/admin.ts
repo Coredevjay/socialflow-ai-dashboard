@@ -19,7 +19,7 @@ router.get('/jobs/queues', async (_req, res) => {
     const queues = await getDiscoveredQueueNames();
     res.json({ queues });
   } catch (error) {
-    res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to list queues' });
+    res.status(500).json({ error: 'Failed to list queues' });
   }
 });
 
@@ -32,11 +32,14 @@ router.post('/jobs/retry', async (req, res) => {
     const result = await retryFailedJobs({ queueName, limit, dryRun, jobId }, logger);
     res.json(result);
   } catch (error) {
-    res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to retry jobs' });
+    res.status(500).json({ error: 'Failed to retry jobs' });
   }
 });
 
 // ── Cache Administration ──────────────────────────────────────────────────────
+
+const CACHE_PREFIX = 'cache:';
+const RESERVED_PREFIXES = ['bull:', 'lock:', 'jwt:', 'oauth:'];
 
 router.post('/cache/clear', async (req, res) => {
   try {
@@ -44,10 +47,18 @@ router.post('/cache/clear', async (req, res) => {
     if (!pattern) {
       return res.status(400).json({ error: 'pattern is required' });
     }
-    const result = await clearCache({ pattern, batchSize, dryRun }, logger);
+    if (typeof pattern !== 'string') {
+      return res.status(400).json({ error: 'pattern must be a string' });
+    }
+    const scoped = pattern.startsWith(CACHE_PREFIX) ? pattern : `${CACHE_PREFIX}${pattern}`;
+    const suffix = scoped.slice(CACHE_PREFIX.length);
+    if (!suffix.replace(/[*?[\]^-]/g, '') || RESERVED_PREFIXES.some((p) => suffix.startsWith(p))) {
+      return res.status(400).json({ error: 'pattern is too broad or targets a reserved prefix' });
+    }
+    const result = await clearCache({ pattern: scoped, batchSize, dryRun }, logger);
     res.json(result);
   } catch (error) {
-    res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to clear cache' });
+    res.status(500).json({ error: 'Failed to clear cache' });
   }
 });
 
@@ -58,7 +69,7 @@ router.get('/migrations', async (_req, res) => {
     const migrations = await listMigrations();
     res.json({ migrations });
   } catch (error) {
-    res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to list migrations' });
+    res.status(500).json({ error: 'Failed to list migrations' });
   }
 });
 
@@ -68,7 +79,7 @@ router.post('/migrations/run', async (req, res) => {
     const result = await runMigrations({ name, dryRun, force }, logger);
     res.json(result);
   } catch (error) {
-    res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to run migrations' });
+    res.status(500).json({ error: 'Failed to run migrations' });
   }
 });
 
@@ -80,7 +91,7 @@ router.post('/migrations/:name/rollback', async (req, res) => {
     }
     res.json(result);
   } catch (error) {
-    res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to rollback migration' });
+    res.status(500).json({ error: 'Failed to rollback migration' });
   }
 });
 

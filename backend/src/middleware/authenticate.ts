@@ -8,7 +8,7 @@ export interface AuthRequest extends Request {
   activeOrgId?: string;
 }
 
-export async function authenticate(
+async function authenticateImpl(
   req: AuthRequest,
   res: Response,
   next: NextFunction,
@@ -61,4 +61,16 @@ export async function authenticate(
 
   req.user = { id: userId };
   next();
+}
+
+export async function authenticate(
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    await authenticateImpl(req, res, next);
+  } catch (err) {
+    next(err);
+  }
 }
