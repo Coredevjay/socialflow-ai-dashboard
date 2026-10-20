@@ -105,11 +105,15 @@ export interface LockOptions {
 export const LockService = {
   /**
    * Acquire a lock and execute a function.
-   * A background interval extends the lock TTL every TTL/2 ms so the lock
+   * A background timer extends the lock TTL every TTL/2 ms so the lock
    * is held for the full duration of the operation even when it exceeds the
    * initial TTL. `fn` receives an AbortSignal that is aborted if a TTL
    * extension fails (e.g. Redis down) — the operation should stop work and
    * the overall call rejects so a second worker is never let in alongside it.
+   *
+   * The extension uses a self-rescheduling `setTimeout` chain (rather than
+   * `setInterval`) so that a slow `extend()` can never overlap itself: the
+   * next tick is only scheduled after the previous extension settles.
    *
    * If Redis is unavailable, falls back to a local in-process AsyncMutex.
    */
@@ -142,10 +146,18 @@ export const LockService = {
       // Extend the lock TTL every TTL/2 ms while the operation is running.
       // If an extension fails, abort the operation rather than letting it
       // keep running after the lock may have already expired in Redis.
+      //
+      // A self-rescheduling setTimeout chain is used instead of setInterval
+      // so that a slow extend() cannot overlap with the next tick and race
+      // the reassignment of `currentLock`.
       const abortController = new AbortController();
       let currentLock = lock;
-      const extendInterval = setInterval(
-        async () => {
+      let extendTimer: ReturnType<typeof setTimeout> | null = null;
+      let stopped = false;
+
+      const scheduleExtend = (): void => {
+        if (stopped) return;
+        extendTimer = setTimeout(async () => {
           try {
             currentLock = await currentLock.extend(duration);
             logger.debug(`Lock extended: ${lockKey}`);
@@ -154,10 +166,14 @@ export const LockService = {
               error: extErr instanceof Error ? extErr.message : String(extErr),
             });
             abortController.abort(extErr);
+            return;
           }
-        },
-        Math.floor(duration / 2),
-      );
+          // Only schedule the next tick once this extension has settled.
+          scheduleExtend();
+        }, Math.floor(duration / 2));
+      };
+
+      scheduleExtend();
 
       const aborted = new Promise<never>((_, reject) => {
         abortController.signal.addEventListener('abort', () =>
@@ -168,7 +184,11 @@ export const LockService = {
       try {
         return await Promise.race([fn(abortController.signal), aborted]);
       } finally {
-        clearInterval(extendInterval);
+        stopped = true;
+        if (extendTimer !== null) {
+          clearTimeout(extendTimer);
+          extendTimer = null;
+        }
         await currentLock.unlock().catch((err) => {
           logger.error(`Failed to unlock ${lockKey}`, { error: err.message });
         });

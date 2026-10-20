@@ -59,7 +59,7 @@ router.get('/ready', authenticate, async (req, res) => {
     res.status(200).json(status);
   } catch (error) {
     res.status(500).json({
-      error: error instanceof Error ? error.message : 'Health check failed',
+      error: 'Health check failed',
     });
   }
 });
@@ -155,7 +155,7 @@ router.get('/status', authenticate, async (req, res) => {
     res.json(status);
   } catch (error) {
     res.status(500).json({
-      error: error instanceof Error ? error.message : 'Health check failed',
+      error: 'Health check failed',
     });
   }
 });
@@ -180,7 +180,7 @@ router.get('/metrics', authenticate, (req, res) => {
     res.json({ metrics });
   } catch (error) {
     res.status(500).json({
-      error: error instanceof Error ? error.message : 'Failed to retrieve metrics',
+      error: 'Failed to retrieve metrics',
     });
   }
 });
@@ -215,7 +215,7 @@ router.get('/metrics/:service', authenticate, (req, res) => {
     res.json({ metrics });
   } catch (error) {
     res.status(500).json({
-      error: error instanceof Error ? error.message : 'Failed to retrieve metrics',
+      error: 'Failed to retrieve metrics',
     });
   }
 });
@@ -241,7 +241,7 @@ router.get('/config', authenticate, (req, res) => {
     res.json(config);
   } catch (error) {
     res.status(500).json({
-      error: error instanceof Error ? error.message : 'Failed to retrieve config',
+      error: 'Failed to retrieve config',
     });
   }
 });
@@ -291,7 +291,7 @@ router.put(
       res.json({ message: 'Configuration updated', config });
     } catch (error) {
       res.status(500).json({
-        error: error instanceof Error ? error.message : 'Failed to update config',
+        error: 'Failed to update config',
       });
     }
   },

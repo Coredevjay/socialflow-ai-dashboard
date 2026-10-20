@@ -13,14 +13,14 @@ router.post('/login', loginRegisterLimiter, validate(credentialsSchema), login);
 router.post('/refresh', refreshLimiter, validate(refreshTokenSchema), refresh);
 router.post('/logout', validate(refreshTokenSchema), logout);
 router.post('/change-password', authenticate, validate(changePasswordSchema), changePassword);
-router.post('/sse-ticket', authenticate, (req: AuthRequest, res) => {
+router.post('/sse-ticket', authenticate, async (req: AuthRequest, res) => {
   const userId = req.user?.id;
   if (!userId) {
     res.status(401).json({ message: 'Unauthorized' });
     return;
   }
 
-  const ticket = sseTicketService.generateTicket(userId);
+  const ticket = await sseTicketService.generateTicket(userId);
   res.status(200).json({ ticket, expiresIn: 30 });
 });
 

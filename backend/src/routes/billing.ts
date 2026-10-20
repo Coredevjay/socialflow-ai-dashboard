@@ -11,7 +11,7 @@ const router = Router();
 const logger = createLogger('billing-routes');
 
 const checkoutSchema = z.object({
-  priceId: z.string().min(1),
+  plan: z.enum(['starter', 'pro', 'enterprise']),
   successUrl: z.string().url(),
   cancelUrl: z.string().url(),
 });
@@ -76,7 +76,7 @@ router.post('/provision', authMiddleware, async (req: AuthRequest, res: Response
     return res.status(201).json(sub);
   } catch (err) {
     logger.error('Provision failed', { error: (err as Error).message });
-    return res.status(502).json({ message: (err as Error).message });
+    return res.status(502).json({ message: 'Internal server error' });
   }
 });
 
@@ -130,10 +130,11 @@ router.get('/credits', authMiddleware, async (req: AuthRequest, res: Response) =
  *         application/json:
  *           schema:
  *             type: object
- *             required: [priceId, successUrl, cancelUrl]
+ *             required: [plan, successUrl, cancelUrl]
  *             properties:
- *               priceId:
+ *               plan:
  *                 type: string
+ *                 enum: [starter, pro, enterprise]
  *               successUrl:
  *                 type: string
  *                 format: uri
@@ -157,19 +158,19 @@ router.post(
   authMiddleware,
   validate(checkoutSchema),
   async (req: AuthRequest, res: Response) => {
-    const { priceId, successUrl, cancelUrl } = req.body;
+    const { plan, successUrl, cancelUrl } = req.body;
     if (rejectDisallowedUrls({ successUrl, cancelUrl }, res)) return;
     try {
       const url = await billingService.createCheckoutSession(
         req.user!.id,
-        priceId,
+        plan,
         successUrl,
         cancelUrl,
       );
       return res.json({ url });
     } catch (err) {
       logger.error('Checkout session failed', { error: (err as Error).message });
-      return res.status(502).json({ message: (err as Error).message });
+      return res.status(502).json({ message: 'Internal server error' });
     }
   },
 );
@@ -215,7 +216,7 @@ router.post(
       return res.json({ url });
     } catch (err) {
       logger.error('Portal session failed', { error: (err as Error).message });
-      return res.status(502).json({ message: (err as Error).message });
+      return res.status(502).json({ message: 'Internal server error' });
     }
   },
 );
@@ -255,7 +256,7 @@ router.post('/webhook', async (req: Request, res: Response) => {
     return res.json({ received: true });
   } catch (err) {
     logger.error('Webhook error', { error: (err as Error).message });
-    return res.status(400).json({ message: (err as Error).message });
+    return res.status(400).json({ message: 'Invalid webhook request' });
   }
 });
 

@@ -12,7 +12,6 @@ model User {
   email               String               @unique
   passwordHash        String
   lastPasswordChange  DateTime             @default(now())
-  role                String               @default("user")
   listings            Listing[]            @relation("MentorListings")
   passwordHistory     PasswordHistory[]
   refreshTokens       RefreshToken[]
@@ -21,7 +20,6 @@ model User {
   memberships         OrganizationMember[]
   roleAssignment      RoleAssignment?
 
-  @@index([email])
   @@index([createdAt])
   @@index([deletedAt])
 }
@@ -88,7 +86,6 @@ model Organization {
   analytics AnalyticsEntry[]
   listings  Listing[]
 
-  @@index([slug])
   @@index([createdAt])
   @@index([deletedAt])
 }
@@ -112,12 +109,12 @@ model Post {
   id                String       @id @default(uuid())
   organizationId    String
   content           String
-  platform          String
+  platform          PostPlatform
   authorId          String?
   externalId        String?
   scheduledAt       DateTime?
   publishedAt       DateTime?
-  moderationStatus  String       @default("pending")
+  moderationStatus  ModerationStatus @default("pending")
   mediaUrls         String[]     @default([])
   createdAt         DateTime     @default(now())
   updatedAt         DateTime     @default(now()) @updatedAt
@@ -125,6 +122,8 @@ model Post {
   organization      Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@index([organizationId])
+  @@index([organizationId, scheduledAt])
+  @@index([organizationId, createdAt])
   @@index([platform])
   @@index([platform, externalId])
   @@index([createdAt])
@@ -144,6 +143,7 @@ model AnalyticsEntry {
 
   @@unique([organizationId, platform, metric, recordedAt])
   @@index([organizationId])
+  @@index([organizationId, platform, metric, recordedAt])
   @@index([platform])
   @@index([metric])
   @@index([recordedAt])
@@ -193,7 +193,7 @@ model Listing {
   id             String        @id @default(uuid())
   title          String
   description    String
-  price          Float?
+  price          Decimal?  @db.Decimal(20, 7)
   isActive       Boolean       @default(true)
   mentorId       String
   mentor         User          @relation("MentorListings", fields: [mentorId], references: [id])
@@ -233,7 +233,7 @@ model WebhookDelivery {
   subscription   WebhookSubscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
   eventType      String
   payload        String              @db.VarChar(65536)
-  status         String              @default("pending")
+  status         WebhookDeliveryStatus              @default("pending")
   attempts       Int                 @default(0)
   nextRetryAt    DateTime?
   errorMessage   String?             @db.VarChar(1000)
@@ -249,7 +249,7 @@ model WebhookDelivery {
 
 model TTSJob {
   id              String   @id
-  status          String   @default("pending")
+  status          TTSJobStatus   @default("pending")
   progress        Int      @default(0)
   request         Json
   outputAudioPath String?
@@ -272,7 +272,7 @@ model PayoutFailure {
   jobId       String
   groupId     String
   recipient   String
-  amount      Float
+  amount      Decimal  @db.Decimal(20, 7)
   currency    String
   reason      String
   failedAt    DateTime @default(now())
@@ -288,28 +288,98 @@ model PayoutTransaction {
   id              String   @id @default(uuid())
   groupId         String
   recipient       String
-  amount          Float
+  amount          Decimal  @db.Decimal(20, 7)
   currency        String
   transactionHash String   @unique
   jobId           String?
-  status          String   @default("pending") // pending | submitted | confirmed | failed
+  status          PayoutStatus   @default("pending")
   createdAt       DateTime @default(now())
   confirmedAt     DateTime?
 
   @@index([groupId])
   @@index([recipient])
-  @@index([transactionHash])
   @@index([jobId])
 }
 
 model Subscription {
   id                     String      @id @default(uuid())
   userId                 String      @unique
-  plan                   String      @default("free")
-  status                 String      @default("active")
+  plan                   SubscriptionPlan      @default("free")
+  status                 SubscriptionStatus      @default("active")
   stripeCustomerId       String      @unique
   stripeSubscriptionId   String?     @unique
   creditsRemaining       Int
   creditsMonthly         Int
   currentPeriodEnd       DateTime?
-  createdAt
+  createdAt              DateTime    @default(now())
+  updatedAt              DateTime    @updatedAt
+  creditLogs             CreditLog[]
+
+  @@index([stripeCustomerId])
+  @@index([stripeSubscriptionId])
+}
+
+model CreditLog {
+  id             String       @id @default(uuid())
+  userId         String
+  action         String
+  delta          Int
+  balanceAfter   Int
+  metadata       Json?
+  createdAt      DateTime     @default(now())
+  subscription   Subscription @relation(fields: [userId], references: [userId], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([createdAt])
+}
+
+enum PostPlatform {
+  instagram
+  tiktok
+  facebook
+  youtube
+  linkedin
+  twitter
+  x
+}
+
+enum ModerationStatus {
+  pending
+  approved
+  rejected
+  flagged
+}
+
+enum WebhookDeliveryStatus {
+  pending
+  success
+  failed
+}
+
+enum TTSJobStatus {
+  pending
+  processing
+  completed
+  failed
+}
+
+enum PayoutStatus {
+  pending
+  submitted
+  confirmed
+  failed
+}
+
+enum SubscriptionPlan {
+  free
+  starter
+  pro
+  enterprise
+}
+
+enum SubscriptionStatus {
+  active
+  canceled
+  past_due
+  trialing
+}

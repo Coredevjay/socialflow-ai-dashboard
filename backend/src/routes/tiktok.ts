@@ -98,7 +98,7 @@ router.get('/user', async (req: Request, res: Response) => {
     return res.json(userInfo);
   } catch (err) {
     logger.error('Failed to fetch TikTok user info', { error: (err as Error).message });
-    return res.status(502).json({ error: (err as Error).message });
+    return res.status(502).json({ error: 'Internal server error' });
   }
 });
 
@@ -231,7 +231,7 @@ router.post(
       });
     } catch (err) {
       logger.error('Failed to upload TikTok video from URL', { error: (err as Error).message });
-      return res.status(502).json({ error: (err as Error).message });
+      return res.status(502).json({ error: 'Internal server error' });
     }
   },
 );
@@ -256,7 +256,7 @@ router.get('/video/status/:publishId', async (req: Request, res: Response) => {
     return res.json(status);
   } catch (err) {
     logger.error('Failed to fetch TikTok video status', { error: (err as Error).message });
-    return res.status(502).json({ error: (err as Error).message });
+    return res.status(502).json({ error: 'Internal server error' });
   }
 });
 

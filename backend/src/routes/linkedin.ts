@@ -90,7 +90,7 @@ router.get('/profile', async (req: Request, res: Response) => {
     });
   } catch (err) {
     logger.error('Failed to fetch LinkedIn profile', { error: (err as Error).message });
-    return res.status(502).json({ error: (err as Error).message });
+    return res.status(502).json({ error: 'Internal server error' });
   }
 });
 
@@ -133,7 +133,7 @@ router.post(
       return res.status(201).json({ success: true, postUrn: result.id });
     } catch (err) {
       logger.error('Failed to share LinkedIn post', { error: (err as Error).message });
-      return res.status(502).json({ error: (err as Error).message });
+      return res.status(502).json({ error: 'Internal server error' });
     }
   },
 );
@@ -156,7 +156,7 @@ router.get('/post/:postUrn/stats', async (req: Request, res: Response) => {
     return res.json(stats);
   } catch (err) {
     logger.error('Failed to fetch LinkedIn post stats', { error: (err as Error).message });
-    return res.status(502).json({ error: (err as Error).message });
+    return res.status(502).json({ error: 'Internal server error' });
   }
 });
 

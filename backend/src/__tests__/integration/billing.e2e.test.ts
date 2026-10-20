@@ -54,7 +54,7 @@ describe('Billing integration end-to-end flow', () => {
 
     const checkoutUrl = await service.createCheckoutSession(
       userId,
-      'price_e2e',
+      'pro',
       'https://example.com/success',
       'https://example.com/cancel',
     );

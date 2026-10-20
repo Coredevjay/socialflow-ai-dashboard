@@ -1,88 +1,144 @@
 /**
  * Event Bus
  *
- * Lightweight in-process publish/subscribe bus used to decouple modules that
- * emit domain events from the modules that react to them. Handlers are
- * registered per event name and invoked synchronously when the event is
- * emitted, so keep handlers fast and non-blocking.
+ * Publish/subscribe bus for job progress events consumed by the SSE endpoint
+ * and SocketService.
  *
- * Usage convention: define event names and payload types in a shared map,
- * subscribe with `on(event, handler)` and publish with `emit(event, payload)`.
- * Errors thrown by a handler are isolated so one failing subscriber does not
- * prevent the remaining handlers from running.
+ * Producers (BullMQ workers) and consumers (API pods) run in separate
+ * processes, so once `attachRedis` has been called the bus routes events
+ * through Redis pub/sub: `emitJobProgress` assigns a per-user monotonically
+ * increasing `seq`, stores the event in a short replay buffer and publishes
+ * it; every process that called `attachRedis` with a subscriber re-emits it
+ * locally. Without Redis the bus falls back to in-process delivery with a
+ * local sequence/buffer (tests, single-process dev).
  */
+import { EventEmitter } from 'events';
+import type Redis from 'ioredis';
 
-type EventHandler<T = unknown> = (payload: T) => void;
+export type JobType = 'video_transcoding' | 'ai_generation';
+export type JobStatus = 'pending' | 'processing' | 'completed' | 'failed';
 
-export class EventBus {
-  private handlers: Map<string, Set<EventHandler>> = new Map();
+export interface JobProgressEvent {
+  jobId: string;
+  userId: string;
+  type: JobType;
+  status: JobStatus;
+  progress: number; // 0-100
+  message?: string;
+  error?: string;
+  meta?: Record<string, unknown>;
+  /** Per-user monotonically increasing sequence, used as the SSE event id. */
+  seq?: number;
+}
 
-  /**
-   * Subscribe to an event. Returns an unsubscribe function.
-   */
-  on<T = unknown>(event: string, handler: EventHandler<T>): () => void {
-    let set = this.handlers.get(event);
-    if (!set) {
-      set = new Set();
-      this.handlers.set(event, set);
-    }
-    set.add(handler as EventHandler);
+export const JOB_PROGRESS_CHANNEL = 'job-progress';
+const REPLAY_BUFFER_SIZE = 100;
+const REPLAY_BUFFER_TTL_S = 300;
 
-    return () => {
-      this.off(event, handler);
-    };
+const seqKey = (userId: string) => `sse:seq:${userId}`;
+const bufKey = (userId: string) => `sse:buf:${userId}`;
+
+class EventBus extends EventEmitter {
+  private pub: Redis | null = null;
+  private sub: Redis | null = null;
+  private localSeq = new Map<string, number>();
+  private localBuf = new Map<string, JobProgressEvent[]>();
+
+  constructor() {
+    super();
+    this.setMaxListeners(200); // support many concurrent SSE connections
   }
 
   /**
-   * Subscribe to an event for a single emission.
+   * Bridge the bus through Redis. `pub` is required to publish from any
+   * process; pass `sub` (a dedicated connection) in processes that serve SSE.
    */
-  once<T = unknown>(event: string, handler: EventHandler<T>): () => void {
-    const unsubscribe = this.on<T>(event, (payload) => {
-      unsubscribe();
-      handler(payload);
-    });
-    return unsubscribe;
-  }
-
-  /**
-   * Remove a previously registered handler.
-   */
-  off<T = unknown>(event: string, handler: EventHandler<T>): void {
-    const set = this.handlers.get(event);
-    if (!set) return;
-    set.delete(handler as EventHandler);
-    if (set.size === 0) {
-      this.handlers.delete(event);
-    }
-  }
-
-  /**
-   * Publish an event to all registered handlers. Handler errors are isolated
-   * so a single failing subscriber cannot break the others.
-   */
-  emit<T = unknown>(event: string, payload: T): void {
-    const set = this.handlers.get(event);
-    if (!set) return;
-    for (const handler of Array.from(set)) {
+  async attachRedis(pub: Redis, sub?: Redis): Promise<void> {
+    this.pub = pub;
+    if (!sub) return;
+    this.sub = sub;
+    sub.on('message', (channel: string, message: string) => {
+      if (channel !== JOB_PROGRESS_CHANNEL) return;
       try {
-        handler(payload);
-      } catch (error) {
-        // eslint-disable-next-line no-console
-        console.error(`Error in event handler for "${event}":`, error);
+        this.dispatch(JSON.parse(message) as JobProgressEvent);
+      } catch {
+        // ignore malformed messages
       }
-    }
+    });
+    await sub.subscribe(JOB_PROGRESS_CHANNEL);
   }
 
-  /**
-   * Remove all handlers, optionally scoped to a single event.
-   */
-  removeAllListeners(event?: string): void {
-    if (event) {
-      this.handlers.delete(event);
-    } else {
-      this.handlers.clear();
+  async detachRedis(): Promise<void> {
+    if (this.sub) await this.sub.unsubscribe(JOB_PROGRESS_CHANNEL).catch(() => undefined);
+    this.pub = null;
+    this.sub = null;
+  }
+
+  emitJobProgress(event: JobProgressEvent): void {
+    if (!this.pub) {
+      const seq = (this.localSeq.get(event.userId) ?? 0) + 1;
+      this.localSeq.set(event.userId, seq);
+      const stamped = { ...event, seq };
+      const buf = this.localBuf.get(event.userId) ?? [];
+      buf.push(stamped);
+      if (buf.length > REPLAY_BUFFER_SIZE) buf.shift();
+      this.localBuf.set(event.userId, buf);
+      this.dispatch(stamped);
+      return;
     }
+    const pub = this.pub;
+    void (async () => {
+      try {
+        const seq = await pub.incr(seqKey(event.userId));
+        const payload = JSON.stringify({ ...event, seq });
+        await pub
+          .multi()
+          .rpush(bufKey(event.userId), payload)
+          .ltrim(bufKey(event.userId), -REPLAY_BUFFER_SIZE, -1)
+          .expire(bufKey(event.userId), REPLAY_BUFFER_TTL_S)
+          .expire(seqKey(event.userId), REPLAY_BUFFER_TTL_S * 12)
+          .publish(JOB_PROGRESS_CHANNEL, payload)
+          .exec();
+      } catch (err) {
+        console.error('Failed to publish job progress event:', err);
+      }
+    })();
+  }
+
+  /** Events for `userId` with seq greater than `lastSeq` (for Last-Event-ID replay). */
+  async getMissedEvents(userId: string, lastSeq: number): Promise<JobProgressEvent[]> {
+    let events: JobProgressEvent[];
+    if (this.pub) {
+      const raw = await this.pub.lrange(bufKey(userId), 0, -1);
+      events = raw.map((r) => JSON.parse(r) as JobProgressEvent);
+    } else {
+      events = this.localBuf.get(userId) ?? [];
+    }
+    return events.filter((e) => (e.seq ?? 0) > lastSeq);
+  }
+
+  private dispatch(event: JobProgressEvent): void {
+    this.emit(`job:${event.userId}`, event);
+    this.emit('job:*', event); // wildcard for admin/monitoring
+  }
+
+  onUserJob(userId: string, listener: (event: JobProgressEvent) => void): void {
+    this.on(`job:${userId}`, listener);
+  }
+
+  offUserJob(userId: string, listener: (event: JobProgressEvent) => void): void {
+    this.off(`job:${userId}`, listener);
+  }
+
+  reset(): void {
+    this.removeAllListeners();
+    this.localSeq.clear();
+    this.localBuf.clear();
   }
 }
 
 export const eventBus = new EventBus();
+
+export const resetEventBus = (): void => {
+  eventBus.reset();
+};

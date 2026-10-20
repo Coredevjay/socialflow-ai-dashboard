@@ -2,7 +2,12 @@ import Stripe from 'stripe';
 import { randomUUID } from 'crypto';
 import { prisma } from '../lib/prisma';
 import { createLogger } from '../lib/logger';
-import { ValidationError } from '../lib/errors';
+import {
+  InsufficientCreditsError,
+  NotProvisionedError,
+  SubscriptionInactiveError,
+  ValidationError,
+} from '../lib/errors';
 import { config } from '../config/config';
 import {
   Subscription,
@@ -14,9 +19,42 @@ import {
 
 const logger = createLogger('billing-service');
 
+export type PaidPlan = Exclude<SubscriptionPlan, 'free'>;
+
+let stripeClient: Stripe | null = null;
 
 function stripe(): Stripe {
-  return new Stripe(config.STRIPE_SECRET_KEY!, { apiVersion: '2026-02-25.clover' });
+  if (!stripeClient) {
+    if (!config.STRIPE_SECRET_KEY) throw new Error('Stripe is not configured');
+    stripeClient = new Stripe(config.STRIPE_SECRET_KEY, {
+      apiVersion: '2026-02-25.clover',
+      timeout: 20_000,
+      maxNetworkRetries: 2,
+    });
+  }
+  return stripeClient;
+}
+
+/** Test hook: drop the cached client so the next call rebuilds it. */
+export function resetStripeClient(): void {
+  stripeClient = null;
+}
+
+/** Resolve a plan key to its server-configured Stripe price id. */
+function resolvePriceId(plan: PaidPlan): string {
+  const priceId = {
+    starter: config.STRIPE_PRICE_STARTER,
+    pro: config.STRIPE_PRICE_PRO,
+    enterprise: config.STRIPE_PRICE_ENTERPRISE,
+  }[plan];
+  if (!priceId) {
+    throw new ValidationError(
+      `No Stripe price configured for plan "${plan}"`,
+      { plan: ['plan is not available'] },
+      'PLAN_NOT_CONFIGURED',
+    );
+  }
+  return priceId;
 }
 
 function toSubscription(row: {
@@ -61,21 +99,34 @@ export class BillingService {
     const customer =
       existingCustomers.data.length > 0
         ? existingCustomers.data[0]
-        : await stripe().customers.create({ email, metadata: { userId } });
+        : await stripe().customers.create(
+            { email, metadata: { userId } },
+            { idempotencyKey: `provision:${userId}` },
+          );
 
-    const sub = await prisma.subscription.create({
-      data: {
-        id: randomUUID(),
-        userId,
-        plan: 'free',
-        status: 'active',
-        stripeCustomerId: customer.id,
-        stripeSubscriptionId: null,
-        creditsRemaining: PLAN_CREDITS.free,
-        creditsMonthly: PLAN_CREDITS.free,
-        currentPeriodEnd: null,
-      },
-    });
+    let sub;
+    try {
+      sub = await prisma.subscription.create({
+        data: {
+          id: randomUUID(),
+          userId,
+          plan: 'free',
+          status: 'active',
+          stripeCustomerId: customer.id,
+          stripeSubscriptionId: null,
+          creditsRemaining: PLAN_CREDITS.free,
+          creditsMonthly: PLAN_CREDITS.free,
+          currentPeriodEnd: null,
+        },
+      });
+    } catch (err) {
+      // A concurrent request won the race (unique userId): return its row.
+      if ((err as { code?: string }).code === 'P2002') {
+        const raced = await prisma.subscription.findUnique({ where: { userId } });
+        if (raced) return toSubscription(raced);
+      }
+      throw err;
+    }
 
     await prisma.creditLog.create({
       data: {
@@ -94,12 +145,13 @@ export class BillingService {
   /** Create a Stripe Checkout session for upgrading to a paid plan */
   public async createCheckoutSession(
     userId: string,
-    priceId: string,
+    plan: PaidPlan,
     successUrl: string,
     cancelUrl: string,
   ): Promise<string> {
+    const priceId = resolvePriceId(plan);
     const sub = await prisma.subscription.findUnique({ where: { userId } });
-    if (!sub) throw new Error('User not provisioned for billing');
+    if (!sub) throw new NotProvisionedError('User not provisioned for billing');
 
     // Explicitly list accepted payment methods to prevent unexpected changes
     // caused by Stripe dashboard defaults. Configurable via STRIPE_PAYMENT_METHODS
@@ -126,7 +178,7 @@ export class BillingService {
   /** Create a Stripe Customer Portal session for managing billing */
   public async createPortalSession(userId: string, returnUrl: string): Promise<string> {
     const sub = await prisma.subscription.findUnique({ where: { userId } });
-    if (!sub) throw new Error('User not provisioned for billing');
+    if (!sub) throw new NotProvisionedError('User not provisioned for billing');
 
     const session = await stripe().billingPortal.sessions.create({
       customer: sub.stripeCustomerId,
@@ -149,9 +201,9 @@ export class BillingService {
 
     return prisma.$transaction(async (tx) => {
       const sub = await tx.subscription.findUnique({ where: { userId } });
-      if (!sub) throw new Error('No subscription found for user');
+      if (!sub) throw new NotProvisionedError();
       if (sub.status !== 'active' && sub.status !== 'trialing') {
-        throw new Error('Subscription is not active');
+        throw new SubscriptionInactiveError();
       }
 
       // Atomic conditional decrement — the WHERE guard ensures only one concurrent
@@ -162,12 +214,11 @@ export class BillingService {
       });
 
       if (updated.count === 0) {
-        throw new Error(
-          `Insufficient credits. Required: ${cost}, available: ${sub.creditsRemaining}`,
-        );
+        throw new InsufficientCreditsError(cost, sub.creditsRemaining);
       }
 
-      const newBalance = sub.creditsRemaining - cost;
+      // The UPDATE above holds the row lock until commit, so this read is not stale.
+      const newBalance = await this.readBalance(tx, userId);
       await tx.creditLog.create({
         data: { userId, action, delta: -cost, balanceAfter: newBalance },
       });
@@ -193,9 +244,9 @@ export class BillingService {
 
     return prisma.$transaction(async (tx) => {
       const sub = await tx.subscription.findUnique({ where: { userId } });
-      if (!sub) throw new Error('No subscription found for user');
+      if (!sub) throw new NotProvisionedError();
       if (sub.status !== 'active' && sub.status !== 'trialing') {
-        throw new Error('Subscription is not active');
+        throw new SubscriptionInactiveError();
       }
 
       const updated = await tx.subscription.updateMany({
@@ -204,12 +255,10 @@ export class BillingService {
       });
 
       if (updated.count === 0) {
-        throw new Error(
-          `Insufficient credits. Required: ${tokens}, available: ${sub.creditsRemaining}`,
-        );
+        throw new InsufficientCreditsError(tokens, sub.creditsRemaining);
       }
 
-      const newBalance = sub.creditsRemaining - tokens;
+      const newBalance = await this.readBalance(tx, userId);
       await tx.creditLog.create({
         data: { userId, action: 'ai:generate', delta: -tokens, balanceAfter: newBalance },
       });
@@ -225,23 +274,37 @@ export class BillingService {
    */
   public async refundCredits(userId: string, action: CreditAction, reason?: string): Promise<number> {
     const sub = await prisma.subscription.findUnique({ where: { userId } });
-    if (!sub) throw new Error('No subscription found for user');
+    if (!sub) throw new NotProvisionedError();
 
     const cost = ACTION_COST[action] ?? 1;
-    const newBalance = sub.creditsRemaining + cost;
-    await prisma.subscription.update({ where: { userId }, data: { creditsRemaining: newBalance } });
-    await prisma.creditLog.create({
-      data: {
-        userId,
-        action: 'credit:topup',
-        delta: cost,
-        balanceAfter: newBalance,
-        metadata: { reason: reason ?? 'refund', refundedAction: action },
-      },
+    const newBalance = await prisma.$transaction(async (tx) => {
+      const updated = await tx.subscription.update({
+        where: { userId },
+        data: { creditsRemaining: { increment: cost } },
+      });
+      await tx.creditLog.create({
+        data: {
+          userId,
+          action: 'credit:topup',
+          delta: cost,
+          balanceAfter: updated.creditsRemaining,
+          metadata: { reason: reason ?? 'refund', refundedAction: action },
+        },
+      });
+      return updated.creditsRemaining;
     });
 
     logger.info('Credits refunded', { userId, action, cost, newBalance, reason });
     return newBalance;
+  }
+
+  private async readBalance(
+    tx: Pick<typeof prisma, 'subscription'>,
+    userId: string,
+  ): Promise<number> {
+    const row = await tx.subscription.findUnique({ where: { userId } });
+    if (!row) throw new Error('No subscription found for user');
+    return row.creditsRemaining;
   }
 
   /** Get the current subscription for a user */
@@ -283,9 +346,27 @@ export class BillingService {
           where: { stripeSubscriptionId: stripeSub.id },
         });
         if (sub) {
-          await prisma.subscription.update({
-            where: { userId: sub.userId },
-            data: { status: 'canceled', stripeSubscriptionId: null },
+          const free = PLAN_CREDITS.free;
+          await prisma.$transaction(async (tx) => {
+            const updated = await tx.subscription.update({
+              where: { userId: sub.userId },
+              data: {
+                status: 'canceled',
+                stripeSubscriptionId: null,
+                plan: 'free',
+                creditsMonthly: free,
+                creditsRemaining: Math.min(sub.creditsRemaining, free),
+              },
+            });
+            await tx.creditLog.create({
+              data: {
+                userId: sub.userId,
+                action: 'credit:reset',
+                delta: updated.creditsRemaining - sub.creditsRemaining,
+                balanceAfter: updated.creditsRemaining,
+                metadata: { reason: 'subscription_canceled', stripeSubscriptionId: stripeSub.id },
+              },
+            });
           });
         }
         break;
@@ -319,22 +400,54 @@ export class BillingService {
       return;
     }
 
-    const priceId = stripeSub.items.data[0]?.price.id ?? '';
-    const price = await stripe().prices.retrieve(priceId, { expand: ['product'] });
-    const product = price.product as Stripe.Product;
-    const plan = (product.metadata?.plan as SubscriptionPlan) ?? 'starter';
+    // Stripe does not guarantee event ordering: re-fetch the authoritative state so a
+    // delayed `updated` event cannot resurrect a cancelled subscription.
+    let current: Stripe.Subscription;
+    try {
+      current = await stripe().subscriptions.retrieve(stripeSub.id);
+    } catch (err) {
+      logger.warn('Could not re-fetch Stripe subscription; skipping sync', {
+        subscriptionId: stripeSub.id,
+        error: (err as Error).message,
+      });
+      return;
+    }
+    if (current.status === 'canceled' || current.status === 'incomplete_expired') {
+      logger.info('Ignoring stale event for ended subscription', { subscriptionId: current.id });
+      return;
+    }
 
-    await prisma.subscription.update({
-      where: { userId: sub.userId },
-      data: {
+    const item = current.items.data[0];
+    if (!item) {
+      logger.warn('Stripe subscription has no items; skipping sync', { subscriptionId: current.id });
+      return;
+    }
+    const price = await stripe().prices.retrieve(item.price.id, { expand: ['product'] });
+    const product = price.product as Stripe.Product;
+    const plan = product.metadata?.plan as SubscriptionPlan | undefined;
+    if (!plan || !Object.prototype.hasOwnProperty.call(PLAN_CREDITS, plan)) {
+      logger.warn('Unknown plan in product metadata; skipping sync', {
+        subscriptionId: current.id,
         plan,
-        status: stripeSub.status,
-        stripeSubscriptionId: stripeSub.id,
-        currentPeriodEnd: stripeSub.items.data[0]?.current_period_end
-          ? new Date(stripeSub.items.data[0].current_period_end * 1000)
-          : null,
-      },
-    });
+      });
+      return;
+    }
+
+    const data: Record<string, unknown> = {
+      plan,
+      status: current.status,
+      stripeSubscriptionId: current.id,
+      currentPeriodEnd: item.current_period_end ? new Date(item.current_period_end * 1000) : null,
+    };
+    if (plan !== sub.plan) {
+      // Plan change: adjust the allowance, preserving credits already used this period.
+      const monthly = PLAN_CREDITS[plan];
+      const used = Math.max(0, sub.creditsMonthly - sub.creditsRemaining);
+      data.creditsMonthly = monthly;
+      data.creditsRemaining = Math.max(0, monthly - used);
+    }
+
+    await prisma.subscription.update({ where: { userId: sub.userId }, data });
   }
 
   private async onPaymentSucceeded(invoice: Stripe.Invoice): Promise<void> {
@@ -346,18 +459,22 @@ export class BillingService {
     if (!sub) return;
 
     const monthly = PLAN_CREDITS[sub.plan as SubscriptionPlan];
-    await prisma.subscription.update({
-      where: { userId: sub.userId },
-      data: { creditsRemaining: monthly, creditsMonthly: monthly },
-    });
-    await prisma.creditLog.create({
-      data: {
-        userId: sub.userId,
-        action: 'credit:reset',
-        delta: monthly,
-        balanceAfter: monthly,
-        metadata: { reason: 'billing_cycle_renewal', invoiceId: invoice.id },
-      },
+    await prisma.$transaction(async (tx) => {
+      const current = await tx.subscription.findUnique({ where: { userId: sub.userId } });
+      const previousBalance = current?.creditsRemaining ?? sub.creditsRemaining;
+      await tx.subscription.update({
+        where: { userId: sub.userId },
+        data: { creditsRemaining: monthly, creditsMonthly: monthly },
+      });
+      await tx.creditLog.create({
+        data: {
+          userId: sub.userId,
+          action: 'credit:reset',
+          delta: monthly - previousBalance,
+          balanceAfter: monthly,
+          metadata: { reason: 'billing_cycle_renewal', invoiceId: invoice.id },
+        },
+      });
     });
 
     logger.info('Credits reset on renewal', { userId: sub.userId, credits: monthly });

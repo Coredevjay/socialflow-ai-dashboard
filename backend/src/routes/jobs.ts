@@ -49,7 +49,7 @@ router.get('/jobs/stats', async (_req: Request, res: Response) => {
     res.json(stats);
   } catch (error: any) {
     logger.error('Error getting system stats', { error });
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -69,7 +69,7 @@ router.get('/jobs/queues', (_req: Request, res: Response) => {
     res.json({ queues, count: queues.length });
   } catch (error: any) {
     logger.error('Error getting queue names', { error });
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -103,7 +103,7 @@ router.get('/jobs/:queue/stats', async (req: Request, res: Response) => {
     res.json(stats);
   } catch (error: any) {
     logger.error('Error getting queue stats', { error });
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -157,7 +157,7 @@ router.get('/jobs/:queue/jobs', async (req: Request, res: Response) => {
     res.json({ jobs, count: jobs.length, status, start, end });
   } catch (error: any) {
     logger.error('Error getting jobs', { error });
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -215,7 +215,7 @@ router.get('/jobs/:queue/jobs/:jobId', async (req: Request, res: Response) => {
     res.json(job);
   } catch (error: any) {
     logger.error('Error getting job', { error });
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -259,7 +259,7 @@ router.get('/jobs/:queue/failed', async (req: Request, res: Response) => {
     res.json({ jobs: failed, count: failed.length });
   } catch (error: any) {
     logger.error('Error getting failed jobs', { error });
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -299,7 +299,7 @@ router.post('/jobs/:queue/jobs/:jobId/retry', authMiddleware, checkPermission('s
     res.json({ success: true, message: `Job ${jobId} retry initiated` });
   } catch (error: any) {
     logger.error('Error retrying job', { error });
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -328,7 +328,7 @@ router.post('/jobs/:queue/retry-all', authMiddleware, checkPermission('settings:
     res.json({ success: true, retried, message: `${retried} jobs retried` });
   } catch (error: any) {
     logger.error('Error retrying all failed jobs', { error });
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -349,7 +349,7 @@ router.delete('/jobs/:queue/jobs/:jobId', authMiddleware, checkPermission('setti
     res.json({ success: true, message: `Job ${jobId} removed` });
   } catch (error: any) {
     logger.error('Error removing job', { error });
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 

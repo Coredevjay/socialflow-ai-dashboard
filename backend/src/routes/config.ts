@@ -48,7 +48,7 @@ router.get('/', authMiddleware, checkPermission('settings:manage'), async (req: 
       configs,
     });
   } catch (error) {
-    res.status(500).json({ success: false, message: (error as Error).message });
+    res.status(500).json({ success: false, message: 'Internal server error' });
   }
 });
 
@@ -63,7 +63,7 @@ router.post('/refresh', authMiddleware, checkPermission('settings:manage'), asyn
     await svc.refreshCache();
     res.json({ success: true, message: 'Configuration cache refreshed successfully' });
   } catch (error) {
-    res.status(500).json({ success: false, message: (error as Error).message });
+    res.status(500).json({ success: false, message: 'Internal server error' });
   }
 });
 
@@ -98,7 +98,7 @@ router.put('/:key', authMiddleware, checkPermission('settings:manage'), async (r
     await svc.set(key, value, configType, description);
     res.json({ success: true, message: `Configuration "${key}" updated successfully` });
   } catch (error) {
-    res.status(500).json({ success: false, message: (error as Error).message });
+    res.status(500).json({ success: false, message: 'Internal server error' });
   }
 });
 

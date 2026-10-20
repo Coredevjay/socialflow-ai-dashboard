@@ -50,7 +50,7 @@ describe('Billing redirect URL allow-list', () => {
   it('rejects /billing/checkout with an external successUrl domain', async () => {
     const app = buildApp();
     const res = await request(app).post('/billing/checkout').send({
-      priceId: 'price_123',
+      plan: 'pro',
       successUrl: 'https://evil-phishing-site.example/success',
       cancelUrl: 'https://socialflow.app/cancel',
     });
@@ -62,7 +62,7 @@ describe('Billing redirect URL allow-list', () => {
   it('rejects /billing/checkout with an external cancelUrl domain', async () => {
     const app = buildApp();
     const res = await request(app).post('/billing/checkout').send({
-      priceId: 'price_123',
+      plan: 'pro',
       successUrl: 'https://socialflow.app/success',
       cancelUrl: 'https://evil-phishing-site.example/cancel',
     });
@@ -75,7 +75,7 @@ describe('Billing redirect URL allow-list', () => {
     mockCreateCheckoutSession.mockResolvedValue('https://checkout.stripe.com/session/abc');
     const app = buildApp();
     const res = await request(app).post('/billing/checkout').send({
-      priceId: 'price_123',
+      plan: 'pro',
       successUrl: 'https://socialflow.app/success',
       cancelUrl: 'https://www.socialflow.app/cancel',
     });
@@ -83,7 +83,7 @@ describe('Billing redirect URL allow-list', () => {
     expect(res.status).toBe(200);
     expect(mockCreateCheckoutSession).toHaveBeenCalledWith(
       'user-1',
-      'price_123',
+      'pro',
       'https://socialflow.app/success',
       'https://www.socialflow.app/cancel',
     );

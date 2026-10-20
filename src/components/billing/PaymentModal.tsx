@@ -121,7 +121,7 @@ export function PaymentModal({
       }
       const { url } = await BillingService.postBillingCheckout({
         requestBody: {
-          priceId: `${plan.id}_${interval}`,
+          plan: plan.id as 'starter' | 'pro' | 'enterprise',
           successUrl,
           cancelUrl,
         },

@@ -1,4 +1,5 @@
-import { BillingService } from '../BillingService';
+process.env.STRIPE_PRICE_PRO = 'price_pro_cfg';
+import { BillingService, resetStripeClient } from '../BillingService';
 import { prisma } from '../../lib/prisma';
 import { ValidationError } from '../../lib/errors';
 import Stripe from 'stripe';
@@ -59,6 +60,7 @@ describe('BillingService', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    resetStripeClient();
     process.env.STRIPE_SECRET_KEY = 'sk_test_123';
     service = new BillingService();
   });
@@ -136,12 +138,74 @@ describe('BillingService', () => {
     });
   });
 
+  describe('regressions (#1787-#1790)', () => {
+    it('uses a configured price id and rejects unconfigured plans', async () => {
+      (prisma.subscription.findUnique as jest.Mock).mockResolvedValue({ stripeCustomerId: 'cus_1' });
+      const create = jest.fn().mockResolvedValue({ url: 'https://checkout' });
+      (Stripe as unknown as jest.Mock).mockImplementationOnce(() => ({
+        checkout: { sessions: { create } },
+      }));
+      await service.createCheckoutSession('u1', 'pro', 'https://s', 'https://c');
+      expect(create.mock.calls[0][0].line_items[0].price).toBe('price_pro_cfg');
+      
+      await expect(
+        service.createCheckoutSession('u1', 'enterprise', 'https://s', 'https://c'),
+      ).rejects.toThrow(ValidationError);
+    });
+
+    it('builds a single Stripe client with timeout and retries', async () => {
+      (prisma.subscription.findUnique as jest.Mock).mockResolvedValue({ stripeCustomerId: 'cus_1' });
+      await service.createCheckoutSession('u1', 'pro', 'https://s', 'https://c').catch(() => {});
+      await service.createCheckoutSession('u1', 'pro', 'https://s', 'https://c').catch(() => {});
+      expect(Stripe).toHaveBeenCalledTimes(1);
+      expect((Stripe as unknown as jest.Mock).mock.calls[0][1]).toMatchObject({
+        timeout: expect.any(Number),
+        maxNetworkRetries: expect.any(Number),
+      });
+    });
+
+    it('creates the customer with an idempotency key and recovers from a unique violation', async () => {
+      const existing = { id: 's', userId: 'u1', plan: 'free', status: 'active', stripeCustomerId: 'cus_1' };
+      (prisma.subscription.findUnique as jest.Mock)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(existing);
+      const create = jest.fn().mockResolvedValue({ id: 'cus_1' });
+      (Stripe as unknown as jest.Mock).mockImplementationOnce(() => ({
+        customers: { list: jest.fn().mockResolvedValue({ data: [] }), create },
+      }));
+      (prisma.subscription.create as jest.Mock).mockRejectedValue({ code: 'P2002' });
+      const result = await service.provisionUser('u1', 'a@b.c');
+      expect(create.mock.calls[0][1]).toEqual({ idempotencyKey: 'provision:u1' });
+      expect(result.stripeCustomerId).toBe('cus_1');
+    });
+
+    it('resets credits in a transaction and logs the real delta', async () => {
+      const tx = {
+        subscription: {
+          findUnique: jest.fn().mockResolvedValue({ creditsRemaining: 5 }),
+          update: jest.fn(),
+        },
+        creditLog: { create: jest.fn() },
+      };
+      (prisma as any).$transaction = jest.fn((cb: any) => cb(tx));
+      (prisma.subscription.findFirst as jest.Mock).mockResolvedValue({
+        userId: 'u1', plan: 'pro', creditsRemaining: 5,
+      });
+      await (service as any).onPaymentSucceeded({
+        billing_reason: 'subscription_cycle', customer: 'cus_1', id: 'in_1',
+      });
+      const data = tx.creditLog.create.mock.calls[0][0].data;
+      expect(data.delta).toBe(data.balanceAfter - 5);
+      expect(tx.subscription.update).toHaveBeenCalled();
+    });
+  });
+
   describe('createCheckoutSession', () => {
     it('should throw error when user is not provisioned', async () => {
       (prisma.subscription.findUnique as jest.Mock).mockResolvedValue(null);
 
       await expect(
-        service.createCheckoutSession('user-123', 'price_123', 'https://success.com', 'https://cancel.com'),
+        service.createCheckoutSession('user-123', 'pro', 'https://success.com', 'https://cancel.com'),
       ).rejects.toThrow('User not provisioned for billing');
     });
 
@@ -167,7 +231,7 @@ describe('BillingService', () => {
 
       const result = await service.createCheckoutSession(
         'user-123',
-        'price_123',
+        'pro',
         'https://success.com',
         'https://cancel.com',
       );

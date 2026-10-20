@@ -7,6 +7,12 @@ export const register = new Registry();
 
 collectDefaultMetrics({ register });
 
+export const sseConnections = new Gauge({
+  name: 'sse_connections',
+  help: 'Currently open SSE (/realtime/stream) connections',
+  registers: [register],
+});
+
 /**
  * Event loop lag gauge — sampled every 500 ms.
  * Measures the delta between when a setTimeout(fn, 0) was scheduled and when it fired.

@@ -175,7 +175,7 @@ describe('createCheckoutSession — payment_method_types', () => {
 
   it('includes payment_method_types defaulting to ["card"]', async () => {
     const service = new BillingService();
-    await service.createCheckoutSession(userId, 'price_123', 'https://ok', 'https://cancel');
+    await service.createCheckoutSession(userId, 'pro', 'https://ok', 'https://cancel');
 
     expect(mockSessionCreate).toHaveBeenCalledTimes(1);
     const callArg = mockSessionCreate.mock.calls[0][0];
@@ -186,7 +186,7 @@ describe('createCheckoutSession — payment_method_types', () => {
   it('respects STRIPE_PAYMENT_METHODS env var', async () => {
     process.env.STRIPE_PAYMENT_METHODS = 'card,link';
     const service = new BillingService();
-    await service.createCheckoutSession(userId, 'price_123', 'https://ok', 'https://cancel');
+    await service.createCheckoutSession(userId, 'pro', 'https://ok', 'https://cancel');
 
     const callArg = mockSessionCreate.mock.calls[0][0];
     expect(callArg.payment_method_types).toEqual(['card', 'link']);
@@ -197,7 +197,7 @@ describe('createCheckoutSession — payment_method_types', () => {
     const service = new BillingService();
     // Empty string falls back to default 'card' because filter(Boolean) removes empty strings
     // and the env var is falsy so the ?? 'card' default kicks in
-    await service.createCheckoutSession(userId, 'price_123', 'https://ok', 'https://cancel');
+    await service.createCheckoutSession(userId, 'pro', 'https://ok', 'https://cancel');
 
     const callArg = mockSessionCreate.mock.calls[0][0];
     expect(callArg).toHaveProperty('payment_method_types');

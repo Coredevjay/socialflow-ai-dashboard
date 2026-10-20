@@ -28,7 +28,7 @@ router.get('/status', (req: Request, res: Response) => {
   } catch (error) {
     res.status(500).json({
       success: false,
-      error: error instanceof Error ? error.message : 'Unknown error',
+      error: 'Unknown error',
     });
   }
 });
@@ -64,7 +64,7 @@ router.get('/status/:service', (req: Request, res: Response) => {
   } catch (error) {
     res.status(404).json({
       success: false,
-      error: error instanceof Error ? error.message : 'Circuit breaker not found',
+      error: 'Circuit breaker not found',
     });
   }
 });
@@ -90,7 +90,7 @@ router.post('/reset', authMiddleware, checkPermission('settings:manage'), (req: 
   } catch (error) {
     res.status(500).json({
       success: false,
-      error: error instanceof Error ? error.message : 'Unknown error',
+      error: 'Unknown error',
     });
   }
 });
@@ -124,7 +124,7 @@ router.post('/:service/open', authMiddleware, checkPermission('settings:manage')
   } catch (error) {
     res.status(500).json({
       success: false,
-      error: error instanceof Error ? error.message : 'Unknown error',
+      error: 'Unknown error',
     });
   }
 });
@@ -158,7 +158,7 @@ router.post('/:service/close', authMiddleware, checkPermission('settings:manage'
   } catch (error) {
     res.status(500).json({
       success: false,
-      error: error instanceof Error ? error.message : 'Unknown error',
+      error: 'Unknown error',
     });
   }
 });
@@ -203,7 +203,7 @@ router.get('/health', async (req: Request, res: Response) => {
   } catch (error) {
     res.status(500).json({
       success: false,
-      error: error instanceof Error ? error.message : 'Unknown error',
+      error: 'Unknown error',
     });
   }
 });
