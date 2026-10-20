@@ -11,12 +11,15 @@ import { Worker } from 'bullmq';
 import { startWorkers } from './index';
 import { closeRedisClient } from '../queues/queueManager';
 import { createLogger } from '../lib/logger';
+import { eventBus } from '../lib/eventBus';
+import { redis } from '../lib/redis';
 
 const logger = createLogger('worker-standalone');
 
 const HEALTH_PORT = Number(process.env.WORKER_HEALTH_PORT ?? 3002);
 const REDIS_PING_TIMEOUT_MS = 2000;
 
+void eventBus.attachRedis(redis); // publish job progress to API pods
 const { ai, social } = startWorkers();
 
 /**

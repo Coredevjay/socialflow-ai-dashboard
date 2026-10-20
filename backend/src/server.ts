@@ -23,6 +23,8 @@ import { Server } from 'http';
 import { createSmsService } from './services/smsService';
 import { initialize2FaLockoutStore } from './services/TwoFactorLockoutInit';
 import { checkRateLimiterStore } from './middleware/rateLimit';
+import { eventBus } from './lib/eventBus';
+import { redis } from './lib/redis';
 
 const logger = createLogger('server');
 const PORT = config.BACKEND_PORT;
@@ -379,6 +381,9 @@ export const bootstrap = async (exit?: (code: number) => void): Promise<void> =>
       doExit(1);
       return;
     }
+
+    // Bridge job progress events (emitted by worker pods) to SSE clients via Redis
+    await eventBus.attachRedis(redis, redis.duplicate());
 
     // Start HTTP server
     serverInstance = app.listen(PORT, () => {

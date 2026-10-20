@@ -19,7 +19,7 @@ describe('eventBus', () => {
 
     eventBus.emitJobProgress(sampleEvent);
 
-    expect(listener).toHaveBeenCalledWith(sampleEvent);
+    expect(listener).toHaveBeenCalledWith(expect.objectContaining(sampleEvent));
   });
 
   it('does not deliver events to a different user', () => {
@@ -37,7 +37,7 @@ describe('eventBus', () => {
 
     eventBus.emitJobProgress(sampleEvent);
 
-    expect(wildcardListener).toHaveBeenCalledWith(sampleEvent);
+    expect(wildcardListener).toHaveBeenCalledWith(expect.objectContaining(sampleEvent));
   });
 
   it('stops delivering events after offUserJob removes the listener', () => {
@@ -58,5 +58,33 @@ describe('eventBus', () => {
     eventBus.emitJobProgress(sampleEvent);
 
     expect(listener).not.toHaveBeenCalled();
+  });
+});
+
+describe('eventBus sequencing and replay', () => {
+  afterEach(() => resetEventBus());
+
+  const ev = (progress: number): JobProgressEvent => ({
+    jobId: 'job-1',
+    userId: 'user-1',
+    type: 'ai_generation',
+    status: 'processing',
+    progress,
+  });
+
+  it('assigns monotonically increasing per-user seq even for repeated progress', () => {
+    const seen: number[] = [];
+    eventBus.onUserJob('user-1', (e) => seen.push(e.seq as number));
+    eventBus.emitJobProgress(ev(50));
+    eventBus.emitJobProgress(ev(50));
+    expect(seen).toEqual([1, 2]);
+  });
+
+  it('replays only events after Last-Event-ID', async () => {
+    eventBus.emitJobProgress(ev(10));
+    eventBus.emitJobProgress(ev(20));
+    eventBus.emitJobProgress(ev(30));
+    const missed = await eventBus.getMissedEvents('user-1', 1);
+    expect(missed.map((e) => e.progress)).toEqual([20, 30]);
   });
 });
