@@ -1,6 +1,7 @@
 import { Response, NextFunction } from 'express';
 import { AuthRequest } from './authenticate';
 import { billingService } from '../services/BillingService';
+import { AppError } from '../lib/errors';
 import { CreditAction } from '../models/Subscription';
 
 /**
@@ -24,9 +25,11 @@ export function requireCredits(action: CreditAction) {
       (req as any).creditsRemaining = balance;
       next();
     } catch (err) {
-      const message = (err as Error).message;
-      const status = message.includes('Insufficient') ? 402 : 403;
-      res.status(status).json({ message });
+      if (err instanceof AppError) {
+        res.status(err.statusCode).json({ message: err.message, code: err.code });
+        return;
+      }
+      next(err);
     }
   };
 }
