@@ -3,10 +3,16 @@ import { AuthRequest } from '../middleware/authenticate';
 import { eventBus, JobProgressEvent } from '../lib/eventBus';
 import { createLogger } from '../lib/logger';
 import { verifyAccessToken } from '../lib/jwt';
+import { sseConnections } from '../lib/metrics';
 import { sseTicketService } from '../services/SSETicketService';
 
 const router = Router();
 const logger = createLogger('SSE');
+
+const MAX_STREAMS_PER_USER = 5;
+const MAX_STREAMS_PER_PROCESS = 150; // below eventBus.setMaxListeners(200)
+const userStreams = new Map<string, number>();
+let totalStreams = 0;
 
 /**
  * @openapi
@@ -34,14 +40,16 @@ const logger = createLogger('SSE');
  *               type: string
  *       401:
  *         description: Missing or invalid credentials
+ *       429:
+ *         description: Too many concurrent streams for this user or process
  */
-router.get('/stream', (req: AuthRequest, res: Response) => {
+router.get('/stream', async (req: AuthRequest, res: Response) => {
   let userId: string | undefined;
 
   // Preferred: SSE ticket
   const queryTicket = req.query.ticket as string | undefined;
   if (queryTicket) {
-    userId = sseTicketService.validateAndConsume(queryTicket) ?? undefined;
+    userId = (await sseTicketService.validateAndConsume(queryTicket)) ?? undefined;
     if (!userId) {
       res.status(401).json({ message: 'Invalid or expired SSE ticket' });
       return;
@@ -66,6 +74,17 @@ router.get('/stream', (req: AuthRequest, res: Response) => {
     }
   }
 
+  if (
+    (userStreams.get(userId) ?? 0) >= MAX_STREAMS_PER_USER ||
+    totalStreams >= MAX_STREAMS_PER_PROCESS
+  ) {
+    res.status(429).json({ message: 'Too many concurrent SSE connections' });
+    return;
+  }
+  userStreams.set(userId, (userStreams.get(userId) ?? 0) + 1);
+  totalStreams++;
+  sseConnections.set(totalStreams);
+
   // SSE headers
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
@@ -89,8 +108,23 @@ router.get('/stream', (req: AuthRequest, res: Response) => {
   }, 25_000);
 
   // Forward job progress events for this user
+  // Replay events missed during a reconnect gap, then stream live ones
+  // (buffering live events until replay finishes keeps ordering intact).
+  const lastEventId = Number.parseInt(String(req.headers['last-event-id'] ?? ''), 10);
+  let lastSent = Number.isFinite(lastEventId) ? lastEventId : 0;
+  let replaying = Number.isFinite(lastEventId);
+  const pending: JobProgressEvent[] = [];
+
+  const deliver = (event: JobProgressEvent) => {
+    const seq = event.seq ?? 0;
+    if (seq && seq <= lastSent) return;
+    if (seq) lastSent = seq;
+    send('job_progress', event, seq ? String(seq) : undefined);
+  };
+
   const onJob = (event: JobProgressEvent) => {
-    send('job_progress', event, `${event.jobId}-${event.progress}`);
+    if (replaying) pending.push(event);
+    else deliver(event);
   };
 
   eventBus.onUserJob(userId, onJob);
@@ -99,8 +133,26 @@ router.get('/stream', (req: AuthRequest, res: Response) => {
   req.on('close', () => {
     clearInterval(heartbeat);
     eventBus.offUserJob(userId, onJob);
+    const remaining = (userStreams.get(userId) ?? 1) - 1;
+    if (remaining <= 0) userStreams.delete(userId);
+    else userStreams.set(userId, remaining);
+    totalStreams--;
+    sseConnections.set(totalStreams);
     logger.info(`SSE client disconnected`, { userId });
   });
+
+  if (replaying) {
+    try {
+      for (const event of await eventBus.getMissedEvents(userId, lastSent)) deliver(event);
+    } catch (err) {
+      logger.warn('SSE replay failed', {
+        userId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    replaying = false;
+    pending.splice(0).forEach(deliver);
+  }
 });
 
 export default router;
