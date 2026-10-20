@@ -85,6 +85,39 @@ export class ConflictError extends AppError {
 }
 
 /**
+ * 402 Payment Required
+ * User does not have enough credits for the requested action
+ */
+export class InsufficientCreditsError extends AppError {
+  constructor(required: number, available: number, code = 'INSUFFICIENT_CREDITS') {
+    super(`Insufficient credits. Required: ${required}, available: ${available}`, 402, code);
+    Object.setPrototypeOf(this, InsufficientCreditsError.prototype);
+  }
+}
+
+/**
+ * 403 Forbidden
+ * Subscription exists but is not active or trialing
+ */
+export class SubscriptionInactiveError extends AppError {
+  constructor(message = 'Subscription is not active', code = 'SUBSCRIPTION_INACTIVE') {
+    super(message, 403, code);
+    Object.setPrototypeOf(this, SubscriptionInactiveError.prototype);
+  }
+}
+
+/**
+ * 404 Not Found
+ * User has no billing subscription provisioned
+ */
+export class NotProvisionedError extends AppError {
+  constructor(message = 'No subscription found for user', code = 'NOT_PROVISIONED') {
+    super(message, 404, code);
+    Object.setPrototypeOf(this, NotProvisionedError.prototype);
+  }
+}
+
+/**
  * 422 Unprocessable Entity
  * Request is well-formed but contains semantic errors
  */

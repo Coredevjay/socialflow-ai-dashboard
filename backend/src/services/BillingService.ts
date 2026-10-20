@@ -2,7 +2,12 @@ import Stripe from 'stripe';
 import { randomUUID } from 'crypto';
 import { prisma } from '../lib/prisma';
 import { createLogger } from '../lib/logger';
-import { ValidationError } from '../lib/errors';
+import {
+  InsufficientCreditsError,
+  NotProvisionedError,
+  SubscriptionInactiveError,
+  ValidationError,
+} from '../lib/errors';
 import { config } from '../config/config';
 import {
   Subscription,
@@ -99,7 +104,7 @@ export class BillingService {
     cancelUrl: string,
   ): Promise<string> {
     const sub = await prisma.subscription.findUnique({ where: { userId } });
-    if (!sub) throw new Error('User not provisioned for billing');
+    if (!sub) throw new NotProvisionedError('User not provisioned for billing');
 
     // Explicitly list accepted payment methods to prevent unexpected changes
     // caused by Stripe dashboard defaults. Configurable via STRIPE_PAYMENT_METHODS
@@ -126,7 +131,7 @@ export class BillingService {
   /** Create a Stripe Customer Portal session for managing billing */
   public async createPortalSession(userId: string, returnUrl: string): Promise<string> {
     const sub = await prisma.subscription.findUnique({ where: { userId } });
-    if (!sub) throw new Error('User not provisioned for billing');
+    if (!sub) throw new NotProvisionedError('User not provisioned for billing');
 
     const session = await stripe().billingPortal.sessions.create({
       customer: sub.stripeCustomerId,
@@ -149,9 +154,9 @@ export class BillingService {
 
     return prisma.$transaction(async (tx) => {
       const sub = await tx.subscription.findUnique({ where: { userId } });
-      if (!sub) throw new Error('No subscription found for user');
+      if (!sub) throw new NotProvisionedError();
       if (sub.status !== 'active' && sub.status !== 'trialing') {
-        throw new Error('Subscription is not active');
+        throw new SubscriptionInactiveError();
       }
 
       // Atomic conditional decrement — the WHERE guard ensures only one concurrent
@@ -162,9 +167,7 @@ export class BillingService {
       });
 
       if (updated.count === 0) {
-        throw new Error(
-          `Insufficient credits. Required: ${cost}, available: ${sub.creditsRemaining}`,
-        );
+        throw new InsufficientCreditsError(cost, sub.creditsRemaining);
       }
 
       const newBalance = sub.creditsRemaining - cost;
@@ -193,9 +196,9 @@ export class BillingService {
 
     return prisma.$transaction(async (tx) => {
       const sub = await tx.subscription.findUnique({ where: { userId } });
-      if (!sub) throw new Error('No subscription found for user');
+      if (!sub) throw new NotProvisionedError();
       if (sub.status !== 'active' && sub.status !== 'trialing') {
-        throw new Error('Subscription is not active');
+        throw new SubscriptionInactiveError();
       }
 
       const updated = await tx.subscription.updateMany({
@@ -204,9 +207,7 @@ export class BillingService {
       });
 
       if (updated.count === 0) {
-        throw new Error(
-          `Insufficient credits. Required: ${tokens}, available: ${sub.creditsRemaining}`,
-        );
+        throw new InsufficientCreditsError(tokens, sub.creditsRemaining);
       }
 
       const newBalance = sub.creditsRemaining - tokens;
@@ -225,7 +226,7 @@ export class BillingService {
    */
   public async refundCredits(userId: string, action: CreditAction, reason?: string): Promise<number> {
     const sub = await prisma.subscription.findUnique({ where: { userId } });
-    if (!sub) throw new Error('No subscription found for user');
+    if (!sub) throw new NotProvisionedError();
 
     const cost = ACTION_COST[action] ?? 1;
     const newBalance = sub.creditsRemaining + cost;
