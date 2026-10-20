@@ -174,4 +174,56 @@ describe('lib/prisma query extension', () => {
       expect(query).toHaveBeenCalledWith({ where: { active: true } });
     });
   });
+
+  describe('regressions', () => {
+    it('upsert scopes where/create/update, not data', async () => {
+      const query = jest.fn().mockResolvedValue({});
+      await allOperations({
+        model: 'Post',
+        operation: 'upsert',
+        args: { __orgId: 'org-1', where: { id: 'p1' }, create: { a: 1 }, update: { a: 2 } },
+        query,
+      });
+      expect(query).toHaveBeenCalledWith({
+        where: { id: 'p1', organizationId: 'org-1' },
+        create: { a: 1, organizationId: 'org-1' },
+        update: { a: 2, organizationId: 'org-1' },
+      });
+    });
+
+    it('throws without __orgId/__allOrgs in strict mode, allows __allOrgs', async () => {
+      process.env.ORG_SCOPE_STRICT = 'true';
+      try {
+        const query = jest.fn().mockResolvedValue([]);
+        await expect(
+          allOperations({ model: 'Post', operation: 'findMany', args: {}, query }),
+        ).rejects.toThrow(/org-scoped/);
+        await allOperations({ model: 'Post', operation: 'findMany', args: { __allOrgs: true }, query });
+        expect(query).toHaveBeenCalledWith({ where: { deletedAt: null } });
+      } finally {
+        delete process.env.ORG_SCOPE_STRICT;
+      }
+    });
+
+    it('rejects __orgId on non-org-scoped models', async () => {
+      await expect(
+        allOperations({ model: 'User', operation: 'findMany', args: { __orgId: 'o' }, query: jest.fn() }),
+      ).rejects.toThrow(/not an org-scoped/);
+    });
+
+    it.each(['count', 'aggregate', 'groupBy', 'update', 'updateMany'])(
+      'filters soft-deleted rows on %s',
+      async (operation) => {
+        const query = jest.fn().mockResolvedValue({});
+        await allOperations({ model: 'User', operation, args: { where: { id: 'u' } }, query });
+        expect(query).toHaveBeenCalledWith({ where: { id: 'u', deletedAt: null } });
+      },
+    );
+
+    it('__includeDeleted opts out and is stripped', async () => {
+      const query = jest.fn().mockResolvedValue(0);
+      await allOperations({ model: 'User', operation: 'count', args: { __includeDeleted: true }, query });
+      expect(query).toHaveBeenCalledWith({});
+    });
+  });
 });
