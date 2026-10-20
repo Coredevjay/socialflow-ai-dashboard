@@ -101,7 +101,7 @@ export function BillingSection(): React.JSX.Element {
     try {
       const { url } = await BillingService.postBillingCheckout({
         requestBody: {
-          priceId: plan.priceId,
+          plan: plan.id as 'starter' | 'pro' | 'enterprise',
           successUrl: window.location.href,
           cancelUrl: window.location.href,
         },

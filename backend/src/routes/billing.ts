@@ -11,7 +11,7 @@ const router = Router();
 const logger = createLogger('billing-routes');
 
 const checkoutSchema = z.object({
-  priceId: z.string().min(1),
+  plan: z.enum(['starter', 'pro', 'enterprise']),
   successUrl: z.string().url(),
   cancelUrl: z.string().url(),
 });
@@ -130,10 +130,11 @@ router.get('/credits', authMiddleware, async (req: AuthRequest, res: Response) =
  *         application/json:
  *           schema:
  *             type: object
- *             required: [priceId, successUrl, cancelUrl]
+ *             required: [plan, successUrl, cancelUrl]
  *             properties:
- *               priceId:
+ *               plan:
  *                 type: string
+ *                 enum: [starter, pro, enterprise]
  *               successUrl:
  *                 type: string
  *                 format: uri
@@ -157,12 +158,12 @@ router.post(
   authMiddleware,
   validate(checkoutSchema),
   async (req: AuthRequest, res: Response) => {
-    const { priceId, successUrl, cancelUrl } = req.body;
+    const { plan, successUrl, cancelUrl } = req.body;
     if (rejectDisallowedUrls({ successUrl, cancelUrl }, res)) return;
     try {
       const url = await billingService.createCheckoutSession(
         req.user!.id,
-        priceId,
+        plan,
         successUrl,
         cancelUrl,
       );

@@ -107,6 +107,9 @@ const envSchema = z
     // startup rather than on the first webhook delivery.
     STRIPE_SECRET_KEY: z.string().min(1, 'STRIPE_SECRET_KEY is required'),
     STRIPE_WEBHOOK_SECRET: z.string().optional(),
+    STRIPE_PRICE_STARTER: z.string().optional(),
+    STRIPE_PRICE_PRO: z.string().optional(),
+    STRIPE_PRICE_ENTERPRISE: z.string().optional(),
 
     // ── Observability ─────────────────────────────────────────────────────────
     OTEL_SERVICE_NAME: z
