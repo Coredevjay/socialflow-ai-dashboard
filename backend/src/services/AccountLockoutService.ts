@@ -52,6 +52,15 @@ function getRedis(): Redis {
 }
 
 /**
+ * Normalise the account key so case/whitespace variants of the same email
+ * (e.g. `A@x.com` vs `a@x.com`) share a single lockout counter and cannot be
+ * rotated to bypass the threshold.
+ */
+function normaliseAccountKey(accountKey: string): string {
+  return accountKey.trim().toLowerCase();
+}
+
+/**
  * Redis calls fail open (never block a login on their own): if Redis is
  * unavailable or slow to respond, attempts simply aren't tracked rather than
  * every login hanging or erroring — matching the fallback posture already
@@ -60,8 +69,9 @@ function getRedis(): Redis {
 export const redisAccountLockoutStore: AccountLockoutStore = {
   async recordFailedAttempt(accountKey: string): Promise<void> {
     try {
-      const attemptsKey = `${PREFIX}${accountKey}${ATTEMPTS_SUFFIX}`;
-      const lockedKey = `${PREFIX}${accountKey}${LOCKED_SUFFIX}`;
+      const key = normaliseAccountKey(accountKey);
+      const attemptsKey = `${PREFIX}${key}${ATTEMPTS_SUFFIX}`;
+      const lockedKey = `${PREFIX}${key}${LOCKED_SUFFIX}`;
 
       const attempts = await withTimeout(getRedis().incr(attemptsKey));
       await withTimeout(getRedis().expire(attemptsKey, LOCKOUT_DURATION_S));
@@ -76,7 +86,8 @@ export const redisAccountLockoutStore: AccountLockoutStore = {
 
   async isLockedOut(accountKey: string): Promise<boolean> {
     try {
-      const result = await withTimeout(getRedis().get(`${PREFIX}${accountKey}${LOCKED_SUFFIX}`));
+      const key = normaliseAccountKey(accountKey);
+      const result = await withTimeout(getRedis().get(`${PREFIX}${key}${LOCKED_SUFFIX}`));
       return result !== null;
     } catch (err) {
       logger.warn('Redis unavailable — account lockout check skipped', { err });
@@ -86,7 +97,8 @@ export const redisAccountLockoutStore: AccountLockoutStore = {
 
   async getLockoutRemainingMs(accountKey: string): Promise<number> {
     try {
-      const ttl = await withTimeout(getRedis().pttl(`${PREFIX}${accountKey}${LOCKED_SUFFIX}`));
+      const key = normaliseAccountKey(accountKey);
+      const ttl = await withTimeout(getRedis().pttl(`${PREFIX}${key}${LOCKED_SUFFIX}`));
       return ttl > 0 ? ttl : 0;
     } catch (err) {
       logger.warn('Redis unavailable — could not compute lockout remaining time', { err });
@@ -96,8 +108,9 @@ export const redisAccountLockoutStore: AccountLockoutStore = {
 
   async resetFailedAttempts(accountKey: string): Promise<void> {
     try {
+      const key = normaliseAccountKey(accountKey);
       await withTimeout(
-        getRedis().del(`${PREFIX}${accountKey}${ATTEMPTS_SUFFIX}`, `${PREFIX}${accountKey}${LOCKED_SUFFIX}`),
+        getRedis().del(`${PREFIX}${key}${ATTEMPTS_SUFFIX}`, `${PREFIX}${key}${LOCKED_SUFFIX}`),
       );
     } catch (err) {
       logger.warn('Redis unavailable — could not reset failed login attempts', { err });

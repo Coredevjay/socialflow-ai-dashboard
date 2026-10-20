@@ -36,6 +36,8 @@ interface OptimizationOptions {
   format?: 'webp' | 'jpeg' | 'png';
 }
 
+const MAX_INPUT_PIXELS = 100_000_000;
+
 export const ImageOptimizationService = {
   /**
    * Initialize cache directory
@@ -81,7 +83,7 @@ export const ImageOptimizationService = {
   optimizeToWebP: async (inputPath: string, options: OptimizationOptions = {}): Promise<Buffer> => {
     const { width, height, quality = 80 } = options;
 
-    let transform = sharp(inputPath);
+    let transform = sharp(inputPath, { limitInputPixels: MAX_INPUT_PIXELS });
 
     if (width || height) {
       transform = transform.resize(width, height, {
@@ -136,7 +138,7 @@ export const ImageOptimizationService = {
 
     // Optimize
     const { width, height, quality = 80 } = options;
-    let transform = sharp(inputPath);
+    let transform = sharp(inputPath, { limitInputPixels: MAX_INPUT_PIXELS });
 
     if (width || height) {
       transform = transform.resize(width, height, {
@@ -208,7 +210,7 @@ export const ImageOptimizationService = {
    * Get image metadata
    */
   getMetadata: async (inputPath: string) => {
-    return sharp(inputPath).metadata();
+    return sharp(inputPath, { limitInputPixels: MAX_INPUT_PIXELS }).metadata();
   },
 
   /**

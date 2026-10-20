@@ -12,15 +12,20 @@ import { z } from 'zod';
  */
 
 export const credentialsSchema = z.object({
-  email: z.string().email(),
-  password: z.string().min(8),
+  email: z.string().trim().toLowerCase().email(),
+  password: z.string().min(8).max(128),
 });
 
 export const refreshTokenSchema = z.object({
   refreshToken: z.string().min(1),
 });
 
-export const changePasswordSchema = z.object({
-  currentPassword: z.string().min(8),
-  newPassword: z.string().min(8),
-});
+export const changePasswordSchema = z
+  .object({
+    currentPassword: z.string().min(8).max(128),
+    newPassword: z.string().min(8).max(128),
+  })
+  .refine((data) => data.newPassword !== data.currentPassword, {
+    message: 'New password must be different from the current password',
+    path: ['newPassword'],
+  });

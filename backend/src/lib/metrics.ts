@@ -120,6 +120,24 @@ export const moderationBypassTotal = new Counter({
 });
 
 /**
+ * JWT blacklist service counters — incremented by AuthBlacklistService.
+ * `authBlacklistRedisErrorsTotal` tracks Redis failures (which trigger the
+ * in-process fallback cache); `authBlacklistFallbackHitsTotal` tracks checks
+ * served from that fallback cache while Redis is unavailable.
+ */
+export const authBlacklistRedisErrorsTotal = new Counter({
+  name: 'auth_blacklist_redis_errors_total',
+  help: 'Total Redis errors encountered by the JWT blacklist service',
+  registers: [register],
+});
+
+export const authBlacklistFallbackHitsTotal = new Counter({
+  name: 'auth_blacklist_fallback_hits_total',
+  help: 'Total blacklist checks served from the in-process fallback cache',
+  registers: [register],
+});
+
+/**
  * Total webhook dispatch attempts (success or failure).
  * Serves as the denominator for the webhook delivery failure-rate SLI:
  * `webhookDispatchFailed / webhookDispatchTotal`.

@@ -5,9 +5,17 @@ import fs from 'fs';
 import { authenticate as authMiddleware } from '../middleware/authenticate';
 import { checkPermission } from '../middleware/checkPermission';
 import { createUploadStorage } from '../lib/uploadStorage';
+import { z } from 'zod';
 import { ImageOptimizationService } from '../services/ImageOptimizationService';
 
 const router = Router();
+
+const imageQuerySchema = z.object({
+  width: z.coerce.number().int().min(1).max(4096).optional(),
+  height: z.coerce.number().int().min(1).max(4096).optional(),
+  quality: z.coerce.number().int().min(1).max(100).default(80),
+  format: z.enum(['webp', 'jpeg', 'png']).default('webp'),
+});
 
 const UPLOAD_BASE = path.resolve(process.cwd(), 'uploads');
 
@@ -87,13 +95,11 @@ router.post(
         return res.status(400).json({ error: 'No image provided' });
       }
 
-      const { width, height, quality, format } = req.query;
-      const options = {
-        width: width ? parseInt(width as string) : undefined,
-        height: height ? parseInt(height as string) : undefined,
-        quality: quality ? parseInt(quality as string) : 80,
-        format: (format as 'webp' | 'jpeg' | 'png') || 'webp',
-      };
+      const parsed = imageQuerySchema.safeParse(req.query);
+      if (!parsed.success) {
+        return res.status(400).json({ error: 'Invalid image options', details: parsed.error.issues });
+      }
+      const options = parsed.data;
 
       const {
         buffer,
@@ -157,13 +163,19 @@ router.post(
  *       400:
  *         description: Missing or invalid path
  */
-router.get('/proxy', async (req: Request, res: Response) => {
+router.get('/proxy', authMiddleware, checkPermission('posts:create'), async (req: Request, res: Response) => {
   try {
-    const { path: imagePath, width, height, quality, format } = req.query;
+    const { path: imagePath } = req.query;
 
     if (!imagePath || typeof imagePath !== 'string') {
       return res.status(400).json({ error: 'path parameter required' });
     }
+
+    const parsed = imageQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'Invalid image options', details: parsed.error.issues });
+    }
+    const options = parsed.data;
 
     // Security: prevent directory traversal via resolve + realpath
     const requestedPath = path.resolve(UPLOAD_BASE, imagePath);
@@ -180,12 +192,6 @@ router.get('/proxy', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Invalid path' });
     }
 
-    const options = {
-      width: width ? parseInt(width as string) : undefined,
-      height: height ? parseInt(height as string) : undefined,
-      quality: quality ? parseInt(quality as string) : 80,
-      format: (format as 'webp' | 'jpeg' | 'png') || 'webp',
-    };
 
     const {
       buffer,
@@ -215,7 +221,7 @@ router.get('/proxy', async (req: Request, res: Response) => {
  *       200:
  *         description: Cache size in bytes and MB
  */
-router.get('/cache/size', async (req: Request, res: Response) => {
+router.get('/cache/size', authMiddleware, checkPermission('settings:manage'), async (req: Request, res: Response) => {
   try {
     const size = await ImageOptimizationService.getCacheSize();
     res.json({ cacheSize: size, cacheSizeMB: (size / 1024 / 1024).toFixed(2) });

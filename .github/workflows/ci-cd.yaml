@@ -5,6 +5,11 @@ on:
     branches: ["main", "develop", "staging", "master"]
   pull_request:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Never cancel an in-flight staging deploy: a half-finished kubectl rollout is worse than a late one.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/staging' }}
+
 permissions:
   contents: read
 
@@ -14,10 +19,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: "22"
           cache: "npm"
@@ -47,10 +52,10 @@ jobs:
       TAG: ${{ github.sha }}
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -79,7 +84,7 @@ jobs:
           exit-code: "1"
 
       - name: Build and push Docker image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: ./backend
           file: backend/Dockerfile
@@ -92,7 +97,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=backend
 
       - name: Set up kubectl
-        uses: azure/setup-kubectl@v4
+        uses: azure/setup-kubectl@901a10e89ea615cf61f57ac05cecdf23e7de06d8 # v3
 
       - name: Configure kubeconfig
         run: |
@@ -133,7 +138,7 @@ jobs:
         #      TAG: ${{ github.sha }}
         #
         #    - name: Build and push worker Docker image
-        #      uses: docker/build-push-action@v6
+        #      uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         #      with:
         #        context: ./backend
         #        file: backend/Dockerfile.worker

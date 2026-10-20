@@ -77,6 +77,18 @@ variable "desired_count" {
   type        = number
 }
 
+variable "min_capacity" {
+  description = "Minimum number of task instances the ECS service auto scales down to"
+  type        = number
+  default     = 1
+}
+
+variable "max_capacity" {
+  description = "Maximum number of task instances the ECS service auto scales up to"
+  type        = number
+  default     = 10
+}
+
 variable "launch_type" {
   description = "ECS launch type for the service (FARGATE or EC2)"
   type        = string
