@@ -14,9 +14,42 @@ import {
 
 const logger = createLogger('billing-service');
 
+export type PaidPlan = Exclude<SubscriptionPlan, 'free'>;
+
+let stripeClient: Stripe | null = null;
 
 function stripe(): Stripe {
-  return new Stripe(config.STRIPE_SECRET_KEY!, { apiVersion: '2026-02-25.clover' });
+  if (!stripeClient) {
+    if (!config.STRIPE_SECRET_KEY) throw new Error('Stripe is not configured');
+    stripeClient = new Stripe(config.STRIPE_SECRET_KEY, {
+      apiVersion: '2026-02-25.clover',
+      timeout: 20_000,
+      maxNetworkRetries: 2,
+    });
+  }
+  return stripeClient;
+}
+
+/** Test hook: drop the cached client so the next call rebuilds it. */
+export function resetStripeClient(): void {
+  stripeClient = null;
+}
+
+/** Resolve a plan key to its server-configured Stripe price id. */
+function resolvePriceId(plan: PaidPlan): string {
+  const priceId = {
+    starter: config.STRIPE_PRICE_STARTER,
+    pro: config.STRIPE_PRICE_PRO,
+    enterprise: config.STRIPE_PRICE_ENTERPRISE,
+  }[plan];
+  if (!priceId) {
+    throw new ValidationError(
+      `No Stripe price configured for plan "${plan}"`,
+      { plan: ['plan is not available'] },
+      'PLAN_NOT_CONFIGURED',
+    );
+  }
+  return priceId;
 }
 
 function toSubscription(row: {
@@ -61,21 +94,34 @@ export class BillingService {
     const customer =
       existingCustomers.data.length > 0
         ? existingCustomers.data[0]
-        : await stripe().customers.create({ email, metadata: { userId } });
+        : await stripe().customers.create(
+            { email, metadata: { userId } },
+            { idempotencyKey: `provision:${userId}` },
+          );
 
-    const sub = await prisma.subscription.create({
-      data: {
-        id: randomUUID(),
-        userId,
-        plan: 'free',
-        status: 'active',
-        stripeCustomerId: customer.id,
-        stripeSubscriptionId: null,
-        creditsRemaining: PLAN_CREDITS.free,
-        creditsMonthly: PLAN_CREDITS.free,
-        currentPeriodEnd: null,
-      },
-    });
+    let sub;
+    try {
+      sub = await prisma.subscription.create({
+        data: {
+          id: randomUUID(),
+          userId,
+          plan: 'free',
+          status: 'active',
+          stripeCustomerId: customer.id,
+          stripeSubscriptionId: null,
+          creditsRemaining: PLAN_CREDITS.free,
+          creditsMonthly: PLAN_CREDITS.free,
+          currentPeriodEnd: null,
+        },
+      });
+    } catch (err) {
+      // A concurrent request won the race (unique userId): return its row.
+      if ((err as { code?: string }).code === 'P2002') {
+        const raced = await prisma.subscription.findUnique({ where: { userId } });
+        if (raced) return toSubscription(raced);
+      }
+      throw err;
+    }
 
     await prisma.creditLog.create({
       data: {
@@ -94,10 +140,11 @@ export class BillingService {
   /** Create a Stripe Checkout session for upgrading to a paid plan */
   public async createCheckoutSession(
     userId: string,
-    priceId: string,
+    plan: PaidPlan,
     successUrl: string,
     cancelUrl: string,
   ): Promise<string> {
+    const priceId = resolvePriceId(plan);
     const sub = await prisma.subscription.findUnique({ where: { userId } });
     if (!sub) throw new Error('User not provisioned for billing');
 
@@ -346,18 +393,22 @@ export class BillingService {
     if (!sub) return;
 
     const monthly = PLAN_CREDITS[sub.plan as SubscriptionPlan];
-    await prisma.subscription.update({
-      where: { userId: sub.userId },
-      data: { creditsRemaining: monthly, creditsMonthly: monthly },
-    });
-    await prisma.creditLog.create({
-      data: {
-        userId: sub.userId,
-        action: 'credit:reset',
-        delta: monthly,
-        balanceAfter: monthly,
-        metadata: { reason: 'billing_cycle_renewal', invoiceId: invoice.id },
-      },
+    await prisma.$transaction(async (tx) => {
+      const current = await tx.subscription.findUnique({ where: { userId: sub.userId } });
+      const previousBalance = current?.creditsRemaining ?? sub.creditsRemaining;
+      await tx.subscription.update({
+        where: { userId: sub.userId },
+        data: { creditsRemaining: monthly, creditsMonthly: monthly },
+      });
+      await tx.creditLog.create({
+        data: {
+          userId: sub.userId,
+          action: 'credit:reset',
+          delta: monthly - previousBalance,
+          balanceAfter: monthly,
+          metadata: { reason: 'billing_cycle_renewal', invoiceId: invoice.id },
+        },
+      });
     });
 
     logger.info('Credits reset on renewal', { userId: sub.userId, credits: monthly });
