@@ -229,6 +229,26 @@ export const pruneExpiredRefreshTokens = async (dryRun: boolean = false): Promis
   }
 };
 
+export const WEBHOOK_DELIVERY_RETENTION_DAYS = 30;
+
+/** Delete WebhookDelivery rows older than the retention window. */
+export const pruneOldWebhookDeliveries = async (dryRun: boolean = false): Promise<number> => {
+  const where = { createdAt: { lt: new Date(Date.now() - WEBHOOK_DELIVERY_RETENTION_DAYS * DAY_MS) } };
+  try {
+    if (dryRun) {
+      const count = await prisma.webhookDelivery.count({ where });
+      logger.info('[DRY-RUN] Would prune old webhook deliveries', { count });
+      return 0;
+    }
+    return (await prisma.webhookDelivery.deleteMany({ where })).count;
+  } catch (error) {
+    logger.error('Failed to prune webhook deliveries', {
+      reason: error instanceof Error ? error.message : String(error),
+    });
+    return 0;
+  }
+};
+
 const buildSummary = (
   byCategory: Record<'logs' | 'analytics', CategoryMetrics>,
   prunedRefreshTokens: number = 0,
@@ -340,6 +360,7 @@ export const runDataPruning = async (
   }
 
   const prunedRefreshTokens = await pruneExpiredRefreshTokens(dryRun);
+  await pruneOldWebhookDeliveries(dryRun);
 
   const summary = buildSummary(byCategory, prunedRefreshTokens);
 

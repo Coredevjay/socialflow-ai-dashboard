@@ -113,15 +113,20 @@ model Post {
   organizationId    String
   content           String
   platform          String
+  authorId          String?
+  externalId        String?
   scheduledAt       DateTime?
+  publishedAt       DateTime?
   moderationStatus  String       @default("pending")
   mediaUrls         String[]     @default([])
   createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @default(now()) @updatedAt
   deletedAt         DateTime?
   organization      Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@index([organizationId])
   @@index([platform])
+  @@index([platform, externalId])
   @@index([createdAt])
   @@index([scheduledAt])
   @@index([moderationStatus])
@@ -137,6 +142,7 @@ model AnalyticsEntry {
   recordedAt     DateTime     @default(now())
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
+  @@unique([organizationId, platform, metric, recordedAt])
   @@index([organizationId])
   @@index([platform])
   @@index([metric])
@@ -226,14 +232,13 @@ model WebhookDelivery {
   subscriptionId String
   subscription   WebhookSubscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
   eventType      String
-  payload        String
+  payload        String              @db.VarChar(65536)
   status         String              @default("pending")
   attempts       Int                 @default(0)
   nextRetryAt    DateTime?
-  lastError      String?
-  errorMessage   String?
+  errorMessage   String?             @db.VarChar(1000)
   responseStatus Int?
-  responseBody   String?
+  responseBody   String?             @db.VarChar(1000)
   createdAt      DateTime            @default(now())
   updatedAt      DateTime            @updatedAt
 
@@ -302,8 +307,8 @@ model Subscription {
   userId                 String      @unique
   plan                   String      @default("free")
   status                 String      @default("active")
-  stripeCustomerId       String
-  stripeSubscriptionId   String?
+  stripeCustomerId       String      @unique
+  stripeSubscriptionId   String?     @unique
   creditsRemaining       Int
   creditsMonthly         Int
   currentPeriodEnd       DateTime?

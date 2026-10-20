@@ -115,7 +115,11 @@ export async function resolveSigningSecret(
     });
     await prisma.webhookDelivery.update({
       where: { id: deliveryId },
-      data: { status: 'failed', nextRetryAt: null, errorMessage: 'Unable to decrypt webhook secret' },
+      data: {
+        status: 'failed',
+        nextRetryAt: null,
+        errorMessage: 'Unable to decrypt webhook secret',
+      },
     });
     return null;
   }
@@ -239,7 +243,7 @@ export async function attemptDelivery(
 
     errorMessage = `HTTP ${responseStatus}`;
   } catch (err) {
-    errorMessage = err instanceof Error ? err.message : String(err);
+    errorMessage = (err instanceof Error ? err.message : String(err)).slice(0, 1000);
     logger.warn(`Delivery ${deliveryId} attempt ${attempt} error`, { errorMessage, url });
   }
 
