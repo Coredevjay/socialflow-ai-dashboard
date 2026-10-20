@@ -4,6 +4,7 @@ import path from 'path';
 import fs from 'fs';
 import { authenticate as authMiddleware } from '../middleware/authenticate';
 import { checkPermission } from '../middleware/checkPermission';
+import { createUploadStorage } from '../lib/uploadStorage';
 import { z } from 'zod';
 import { ImageOptimizationService } from '../services/ImageOptimizationService';
 
@@ -18,24 +19,7 @@ const imageQuerySchema = z.object({
 
 const UPLOAD_BASE = path.resolve(process.cwd(), 'uploads');
 
-const mimeToExt: Record<string, string> = {
-  'image/jpeg': '.jpg',
-  'image/png': '.png',
-  'image/webp': '.webp',
-  'image/gif': '.gif',
-};
-
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const uploadDir = path.join(process.cwd(), 'uploads', 'images');
-    cb(null, uploadDir);
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-    const ext = mimeToExt[file.mimetype] ?? '.bin';
-    cb(null, file.fieldname + '-' + uniqueSuffix + ext);
-  },
-});
+const storage = createUploadStorage('images');
 
 const upload = multer({
   storage,
@@ -125,7 +109,7 @@ router.post(
       } = await ImageOptimizationService.optimize(req.file.path, options);
 
       res.setHeader('Content-Type', `image/${resultFormat}`);
-      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      res.setHeader('Cache-Control', 'private, max-age=300, must-revalidate');
       res.setHeader('ETag', etag);
       res.setHeader('X-Cache-Key', cacheKey);
       res.send(buffer);
@@ -217,7 +201,7 @@ router.get('/proxy', authMiddleware, checkPermission('posts:create'), async (req
     } = await ImageOptimizationService.optimize(fullPath, options);
 
     res.setHeader('Content-Type', `image/${resultFormat}`);
-    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    res.setHeader('Cache-Control', 'private, max-age=300, must-revalidate');
     res.setHeader('ETag', etag);
     res.setHeader('X-Cache-Key', cacheKey);
     res.send(buffer);
