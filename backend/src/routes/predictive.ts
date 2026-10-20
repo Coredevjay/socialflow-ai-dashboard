@@ -27,7 +27,7 @@ router.post(
       const prediction = await predictiveService.predictReach(req.body);
       res.json({ success: true, data: prediction });
     } catch (error) {
-      res.status(500).json({ success: false, message: (error as Error).message });
+      res.status(500).json({ success: false, message: 'Internal server error' });
     }
   },
 );

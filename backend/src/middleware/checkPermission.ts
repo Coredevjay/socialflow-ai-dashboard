@@ -18,10 +18,15 @@ export function checkPermission(...required: Permission[]) {
       return;
     }
 
-    const granted = await Promise.all(required.map((p) => RoleStore.hasPermission(userId, p)));
-    const missing = required.filter((_, i) => !granted[i]);
-    if (missing.length > 0) {
-      res.status(403).json({ message: 'Forbidden', missing });
+    try {
+      const granted = await Promise.all(required.map((p) => RoleStore.hasPermission(userId, p)));
+      const missing = required.filter((_, i) => !granted[i]);
+      if (missing.length > 0) {
+        res.status(403).json({ message: 'Forbidden', missing });
+        return;
+      }
+    } catch (err) {
+      next(err);
       return;
     }
 

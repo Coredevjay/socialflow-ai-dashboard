@@ -76,7 +76,7 @@ router.post('/provision', authMiddleware, async (req: AuthRequest, res: Response
     return res.status(201).json(sub);
   } catch (err) {
     logger.error('Provision failed', { error: (err as Error).message });
-    return res.status(502).json({ message: (err as Error).message });
+    return res.status(502).json({ message: 'Internal server error' });
   }
 });
 
@@ -169,7 +169,7 @@ router.post(
       return res.json({ url });
     } catch (err) {
       logger.error('Checkout session failed', { error: (err as Error).message });
-      return res.status(502).json({ message: (err as Error).message });
+      return res.status(502).json({ message: 'Internal server error' });
     }
   },
 );
@@ -215,7 +215,7 @@ router.post(
       return res.json({ url });
     } catch (err) {
       logger.error('Portal session failed', { error: (err as Error).message });
-      return res.status(502).json({ message: (err as Error).message });
+      return res.status(502).json({ message: 'Internal server error' });
     }
   },
 );
@@ -255,7 +255,7 @@ router.post('/webhook', async (req: Request, res: Response) => {
     return res.json({ received: true });
   } catch (err) {
     logger.error('Webhook error', { error: (err as Error).message });
-    return res.status(400).json({ message: (err as Error).message });
+    return res.status(400).json({ message: 'Invalid webhook request' });
   }
 });
 

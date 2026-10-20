@@ -101,7 +101,7 @@ router.get('/pages', async (req: Request, res: Response) => {
     });
   } catch (err) {
     logger.error('Failed to fetch pages', { error: (err as Error).message });
-    return res.status(502).json({ error: (err as Error).message });
+    return res.status(502).json({ error: 'Internal server error' });
   }
 });
 
@@ -148,7 +148,7 @@ router.post(
       });
     } catch (err) {
       logger.error('Failed to create post', { error: (err as Error).message });
-      return res.status(502).json({ error: (err as Error).message });
+      return res.status(502).json({ error: 'Internal server error' });
     }
   },
 );
@@ -171,7 +171,7 @@ router.get('/post/:pageId/:postId/comments', async (req: Request, res: Response)
     return res.json({ comments });
   } catch (err) {
     logger.error('Failed to fetch comments', { error: (err as Error).message });
-    return res.status(502).json({ error: (err as Error).message });
+    return res.status(502).json({ error: 'Internal server error' });
   }
 });
 
@@ -204,7 +204,7 @@ router.post(
       return res.json({ success: true, commentId: result.id });
     } catch (err) {
       logger.error('Failed to reply to comment', { error: (err as Error).message });
-      return res.status(502).json({ error: (err as Error).message });
+      return res.status(502).json({ error: 'Internal server error' });
     }
   },
 );
@@ -233,7 +233,7 @@ router.delete(
       return res.json({ success: result });
     } catch (err) {
       logger.error('Failed to delete comment', { error: (err as Error).message });
-      return res.status(502).json({ error: (err as Error).message });
+      return res.status(502).json({ error: 'Internal server error' });
     }
   },
 );
@@ -256,7 +256,7 @@ router.get('/page/:pageId/insights', async (req: Request, res: Response) => {
     return res.json(insights);
   } catch (err) {
     logger.error('Failed to fetch page insights', { error: (err as Error).message });
-    return res.status(502).json({ error: (err as Error).message });
+    return res.status(502).json({ error: 'Internal server error' });
   }
 });
 
