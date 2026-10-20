@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import multer from 'multer';
-import path from 'path';
+import { createUploadStorage } from '../../lib/uploadStorage';
 import { videoService } from '../../../services/VideoService';
 import { videoQueue } from '../../../queues/VideoQueue';
 import { videoHealthService } from '../../../services/VideoHealthService';
@@ -42,16 +42,7 @@ router.get('/health', async (req: Request, res: Response) => {
 router.use(authMiddleware);
 
 // Configure multer for video uploads
-const storage = multer.diskStorage({
-  destination: async (req, file, cb) => {
-    const uploadDir = path.join(process.cwd(), 'uploads', 'videos');
-    cb(null, uploadDir);
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
-  },
-});
+const storage = createUploadStorage('videos');
 
 const upload = multer({
   storage,

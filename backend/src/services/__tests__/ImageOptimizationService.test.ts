@@ -33,6 +33,36 @@ describe('ImageOptimizationService', () => {
     });
   });
 
+  describe('getCacheKey (hardening)', () => {
+    it('is a sha256 hex digest independent of option property order', () => {
+      const k1 = ImageOptimizationService.getCacheKey('/a.jpg', { width: 64, quality: 80 });
+      const k2 = ImageOptimizationService.getCacheKey('/a.jpg', { quality: 80, width: 64 });
+      expect(k1).toMatch(/^[0-9a-f]{64}$/);
+      expect(k1).toBe(k2);
+    });
+
+    it('changes when mtime or size changes', () => {
+      const base = ImageOptimizationService.getCacheKey('/a.jpg', {}, { mtimeMs: 1, size: 10 });
+      expect(ImageOptimizationService.getCacheKey('/a.jpg', {}, { mtimeMs: 2, size: 10 })).not.toBe(base);
+      expect(ImageOptimizationService.getCacheKey('/a.jpg', {}, { mtimeMs: 1, size: 11 })).not.toBe(base);
+    });
+  });
+
+  describe('evict', () => {
+    it('removes least recently used files until under budget', async () => {
+      (fs.readdir as jest.Mock).mockResolvedValue(['old.webp', 'new.webp']);
+      (fs.stat as jest.Mock).mockImplementation(async (f: string) =>
+        f.includes('old')
+          ? { size: 100, atimeMs: Date.now() - 1000, mtimeMs: Date.now() - 1000 }
+          : { size: 100, atimeMs: Date.now(), mtimeMs: Date.now() },
+      );
+      (fs.unlink as jest.Mock).mockResolvedValue(undefined);
+      const removed = await ImageOptimizationService.evict(100, 1e12);
+      expect(removed).toBe(1);
+      expect((fs.unlink as jest.Mock).mock.calls[0][0]).toContain('old.webp');
+    });
+  });
+
   describe('getCachePath', () => {
     it('should return correct cache path', () => {
       const cacheKey = 'abc123';
