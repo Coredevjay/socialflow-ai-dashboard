@@ -37,12 +37,11 @@ beforeEach(async () => {
 });
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-function userPayload(overrides: Partial<{ email: string; role: string }> = {}) {
+function userPayload(overrides: Partial<{ email: string }> = {}) {
   return {
     id: randomUUID(),
     email: overrides.email ?? `user-${randomUUID()}@example.com`,
     passwordHash: 'hashed',
-    role: overrides.role ?? 'user',
     refreshTokens: [],
     lastPasswordChange: new Date(),
   };
@@ -124,12 +123,12 @@ describe('UserRepository.update', () => {
     const payload = userPayload();
     await repo.create(payload);
 
-    const updated = await repo.update(payload.id, { role: 'admin' });
-    expect(updated?.role).toBe('admin');
+    const updated = await repo.update(payload.id, { passwordHash: 'new-hash' });
+    expect(updated?.passwordHash).toBe('new-hash');
   });
 
   it('returns null for a non-existent user (P2025)', async () => {
-    expect(await repo.update(randomUUID(), { role: 'admin' })).toBeNull();
+    expect(await repo.update(randomUUID(), { passwordHash: 'new-hash' })).toBeNull();
   });
 });
 

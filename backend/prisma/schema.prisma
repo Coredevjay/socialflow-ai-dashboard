@@ -12,7 +12,6 @@ model User {
   email               String               @unique
   passwordHash        String
   lastPasswordChange  DateTime             @default(now())
-  role                String               @default("user")
   listings            Listing[]            @relation("MentorListings")
   passwordHistory     PasswordHistory[]
   refreshTokens       RefreshToken[]
@@ -121,6 +120,8 @@ model Post {
   organization      Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@index([organizationId])
+  @@index([organizationId, scheduledAt])
+  @@index([organizationId, createdAt])
   @@index([platform])
   @@index([createdAt])
   @@index([scheduledAt])
@@ -138,6 +139,7 @@ model AnalyticsEntry {
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@index([organizationId])
+  @@index([organizationId, platform, metric, recordedAt])
   @@index([platform])
   @@index([metric])
   @@index([recordedAt])
